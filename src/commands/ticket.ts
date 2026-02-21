@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { isConfigured } from "../lib/config.js";
+import { isConfigured, resolveAlias } from "../lib/config.js";
 import { ItxClient } from "../lib/client.js";
 import {
   printTable,
@@ -190,20 +190,36 @@ export function registerTicketCommands(program: Command): void {
     .description("Update an existing ticket")
     .option("-s, --subject <text>", "New subject")
     .option("--status <status>", "New status")
+    .option("--category <category>", "New category")
+    .option("--assignee <user>", "Assign to user (email or alias)")
     .option("--json", "Output raw JSON")
     .action(
       async (
         id: string,
-        opts: { subject?: string; status?: string; json: boolean },
+        opts: {
+          subject?: string;
+          status?: string;
+          category?: string;
+          assignee?: string;
+          json: boolean;
+        },
       ) => {
         const client = requireAuth();
         try {
           const body: Record<string, unknown> = {};
           if (opts.subject) body.subject = opts.subject;
           if (opts.status) body.status = opts.status;
+          if (opts.category) body.category = opts.category;
+          if (opts.assignee) {
+            body.members = [
+              { role: ROLES.ASSIGNED_USER, name: resolveAlias(opts.assignee) },
+            ];
+          }
 
           if (Object.keys(body).length === 0) {
-            printError("Provide at least one field to update (--subject, --status).");
+            printError(
+              "Provide at least one field to update (--subject, --status, --category, --assignee).",
+            );
             process.exit(1);
           }
 
@@ -221,6 +237,79 @@ export function registerTicketCommands(program: Command): void {
           }
 
           printSuccess(`Ticket ${id} updated.`);
+        } catch (err) {
+          printError(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        }
+      },
+    );
+
+  ticket
+    .command("activities <id>")
+    .alias("act")
+    .description("List activities and comments on a ticket")
+    .option("--json", "Output raw JSON")
+    .action(async (id: string, opts: { json: boolean }) => {
+      const client = requireAuth();
+      try {
+        const data = await client.request<{
+          comments?: Record<string, unknown>[];
+        }>(`/rest/itxems/activities/${id}/comments`);
+
+        if (opts.json) {
+          printJson(data);
+          return;
+        }
+
+        const comments = data.comments ?? [];
+        if (comments.length === 0) {
+          printInfo("No activities or comments.");
+          return;
+        }
+
+        for (const c of comments) {
+          const date = c.createdTs
+            ? new Date(c.createdTs as string).toLocaleString()
+            : "";
+          const author = c.createdBy ?? c.author ?? "(unknown)";
+          console.log(
+            `[${date}] ${author as string}:`,
+          );
+          console.log(`  ${c.text ?? c.body ?? ""}`);
+          console.log();
+        }
+      } catch (err) {
+        printError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    });
+
+  ticket
+    .command("comment <id>")
+    .description("Add a comment to a ticket")
+    .requiredOption("-m, --message <text>", "Comment text")
+    .option("--json", "Output raw JSON")
+    .action(
+      async (
+        id: string,
+        opts: { message: string; json: boolean },
+      ) => {
+        const client = requireAuth();
+        try {
+          const data = await client.request<Record<string, unknown>>(
+            `/rest/itxems/activities/${id}/comments`,
+            {
+              method: "POST",
+              body: { text: opts.message },
+            },
+          );
+
+          if (opts.json) {
+            printJson(data);
+            return;
+          }
+
+          printSuccess(`Comment added to ticket ${id}.`);
         } catch (err) {
           printError(err instanceof Error ? err.message : String(err));
           process.exit(1);

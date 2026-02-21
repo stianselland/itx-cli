@@ -5,6 +5,10 @@ import {
   clearConfig,
   isConfigured,
   getConfigPath,
+  getAliases,
+  setAlias,
+  removeAlias,
+  resolveAlias,
 } from "../lib/config.js";
 
 afterEach(() => {
@@ -97,5 +101,56 @@ describe("config", () => {
     const p = getConfigPath();
     expect(typeof p).toBe("string");
     expect(p.length).toBeGreaterThan(0);
+  });
+
+  describe("aliases", () => {
+    it("returns empty aliases by default", () => {
+      expect(getAliases()).toEqual({});
+    });
+
+    it("sets and retrieves an alias", () => {
+      setAlias("dave", "dave@company.com");
+      expect(getAliases()).toEqual({ dave: "dave@company.com" });
+    });
+
+    it("overwrites an existing alias", () => {
+      setAlias("dave", "dave@old.com");
+      setAlias("dave", "dave@new.com");
+      expect(getAliases()).toEqual({ dave: "dave@new.com" });
+    });
+
+    it("supports multiple aliases", () => {
+      setAlias("dave", "dave@company.com");
+      setAlias("alice", "alice@company.com");
+      expect(getAliases()).toEqual({
+        dave: "dave@company.com",
+        alice: "alice@company.com",
+      });
+    });
+
+    it("removes an existing alias and returns true", () => {
+      setAlias("dave", "dave@company.com");
+      expect(removeAlias("dave")).toBe(true);
+      expect(getAliases()).toEqual({});
+    });
+
+    it("returns false when removing a non-existent alias", () => {
+      expect(removeAlias("nobody")).toBe(false);
+    });
+
+    it("resolveAlias returns the value for a known alias", () => {
+      setAlias("dave", "dave@company.com");
+      expect(resolveAlias("dave")).toBe("dave@company.com");
+    });
+
+    it("resolveAlias returns the input unchanged for unknown aliases", () => {
+      expect(resolveAlias("unknown@email.com")).toBe("unknown@email.com");
+    });
+
+    it("aliases survive getConfig round-trip", () => {
+      setAlias("dave", "dave@company.com");
+      const c = getConfig();
+      expect(c.aliases).toEqual({ dave: "dave@company.com" });
+    });
   });
 });

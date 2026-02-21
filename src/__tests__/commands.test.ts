@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Command } from "commander";
-import { setConfig, clearConfig, getConfig } from "../lib/config.js";
+import {
+  setConfig,
+  clearConfig,
+  getConfig,
+  getAliases,
+  setAlias,
+} from "../lib/config.js";
 import { registerConfigCommands } from "../commands/config.js";
 import { registerTicketCommands, ROLES } from "../commands/ticket.js";
 
@@ -290,5 +296,212 @@ describe("ticket commands", () => {
 
     await program.parseAsync(["node", "itx", "t", "ls"]);
     // If it didn't throw, the alias worked
+  });
+
+  it("ticket update sends category and assignee", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ id: 42 }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "update",
+      "42",
+      "--category",
+      "billing",
+      "--assignee",
+      "alice@company.com",
+    ]);
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/rest/itxems/activities/42");
+    expect(opts.method).toBe("PUT");
+
+    const body = JSON.parse(opts.body as string);
+    expect(body.category).toBe("billing");
+    expect(body.members).toEqual([
+      { role: ROLES.ASSIGNED_USER, name: "alice@company.com" },
+    ]);
+  });
+
+  it("ticket update resolves assignee alias", async () => {
+    setAlias("dave", "dave@company.com");
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ id: 42 }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "update",
+      "42",
+      "--assignee",
+      "dave",
+    ]);
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string);
+    expect(body.members).toEqual([
+      { role: ROLES.ASSIGNED_USER, name: "dave@company.com" },
+    ]);
+  });
+
+  it("ticket activities fetches comments for a ticket", async () => {
+    const commentsData = {
+      comments: [
+        {
+          createdTs: "2025-06-01T10:00:00Z",
+          createdBy: "alice@company.com",
+          text: "Looking into this now",
+        },
+        {
+          createdTs: "2025-06-01T11:00:00Z",
+          createdBy: "bob@company.com",
+          text: "Fixed in latest release",
+        },
+      ],
+    };
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => commentsData,
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync(["node", "itx", "ticket", "activities", "42"]);
+
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/rest/itxems/activities/42/comments");
+
+    const output = spy.mock.calls.map((c) => c[0] ?? c.join(" ")).join("\n");
+    expect(output).toContain("alice@company.com");
+    expect(output).toContain("Looking into this now");
+    expect(output).toContain("bob@company.com");
+  });
+
+  it("ticket activities --json outputs raw JSON", async () => {
+    const commentsData = { comments: [{ text: "hi" }] };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => commentsData,
+      }),
+    );
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync(["node", "itx", "ticket", "activities", "42", "--json"]);
+
+    expect(spy).toHaveBeenCalledWith(JSON.stringify(commentsData, null, 2));
+  });
+
+  it("ticket comment sends POST with message", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ id: 100 }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "comment",
+      "42",
+      "-m",
+      "This is my comment",
+    ]);
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/rest/itxems/activities/42/comments");
+    expect(opts.method).toBe("POST");
+
+    const body = JSON.parse(opts.body as string);
+    expect(body.text).toBe("This is my comment");
+  });
+});
+
+describe("alias commands", () => {
+  it("config alias set creates an alias", async () => {
+    const program = createProgram();
+    registerConfigCommands(program);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "config",
+      "alias",
+      "set",
+      "dave",
+      "dave@company.com",
+    ]);
+
+    expect(getAliases()).toEqual({ dave: "dave@company.com" });
+  });
+
+  it("config alias list shows aliases", async () => {
+    setAlias("dave", "dave@company.com");
+    setAlias("alice", "alice@company.com");
+
+    const program = createProgram();
+    registerConfigCommands(program);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await program.parseAsync(["node", "itx", "config", "alias", "list"]);
+
+    const output = spy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).toContain("dave");
+    expect(output).toContain("dave@company.com");
+    expect(output).toContain("alice");
+  });
+
+  it("config alias remove deletes an alias", async () => {
+    setAlias("dave", "dave@company.com");
+
+    const program = createProgram();
+    registerConfigCommands(program);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "config",
+      "alias",
+      "remove",
+      "dave",
+    ]);
+
+    expect(getAliases()).toEqual({});
   });
 });
