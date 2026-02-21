@@ -10,13 +10,20 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
     "url": "http://local_proxy@127.0.0.1:35076/git/stianselland/itx-cli"
   },
-  "keywords": ["itx", "cli", "ticketing", "crm"],
+  "keywords": [
+    "itx",
+    "cli",
+    "ticketing",
+    "crm"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -27,6 +34,7 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "vitest": "^4.0.18"
   }
 }
