@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 
+import { createRequire } from "module";
 import { Command } from "commander";
 import { registerConfigCommands } from "./commands/config.js";
 import { registerTicketCommands } from "./commands/ticket.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
 
 const program = new Command();
 
 program
   .name("itx")
   .description("CLI for the ITX Portal API")
-  .version("0.1.0");
+  .version(version);
 
 registerConfigCommands(program);
 registerTicketCommands(program);
