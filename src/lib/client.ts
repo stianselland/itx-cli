@@ -8,7 +8,7 @@ interface RequestOptions {
 
 export class ItxClient {
   private endpoint: string;
-  private headers: Record<string, string>;
+  private authParams: Record<string, string>;
 
   constructor() {
     const config = getConfig();
@@ -20,12 +20,10 @@ export class ItxClient {
     }
 
     this.endpoint = config.activeEndpoint || config.ssoEndpoint;
-    this.headers = {
+    this.authParams = {
       tokenv2: config.tokenv2,
       rcntrl: config.rcntrl,
       ccntrl: config.ccntrl,
-      "Content-Type": "application/json",
-      Accept: "application/json",
     };
   }
 
@@ -37,9 +35,8 @@ export class ItxClient {
     const config = getConfig();
     const ssoUrl = config.ssoEndpoint.replace(/\/$/, "");
 
-    const res = await fetch(`${ssoUrl}/rest/api/state`, {
-      headers: this.headers,
-    });
+    const qs = new URLSearchParams(this.authParams).toString();
+    const res = await fetch(`${ssoUrl}/rest/api/state?${qs}`);
 
     if (!res.ok) {
       throw new Error(
@@ -76,24 +73,23 @@ export class ItxClient {
   ): Promise<T> {
     const { method = "GET", body, params } = options;
 
-    let url = `${this.endpoint}${path}`;
-
+    const searchParams = new URLSearchParams(this.authParams);
     if (params) {
-      const searchParams = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined) {
           searchParams.set(key, String(value));
         }
       }
-      const qs = searchParams.toString();
-      if (qs) {
-        url += `?${qs}`;
-      }
     }
+
+    const url = `${this.endpoint}${path}?${searchParams.toString()}`;
 
     const res = await fetch(url, {
       method,
-      headers: this.headers,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
 

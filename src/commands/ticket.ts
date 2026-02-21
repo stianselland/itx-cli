@@ -9,9 +9,6 @@ import {
   printInfo,
 } from "../lib/output.js";
 
-/** Known activity type ID for tickets/cases in ITX. */
-const TICKET_ACTIVITY_TYPE = 4;
-
 /** Role constants for ticket members. */
 export const ROLES = {
   ASSIGNED_USER: 1,
@@ -19,12 +16,116 @@ export const ROLES = {
   CONTACT_PERSON: 20,
 } as const;
 
+/** Activity link types. */
+const LINK_TYPES = {
+  CONVERSATION: 13,
+  CASE: 14,
+} as const;
+
+/** Activity type IDs. */
+const ACTIVITY_TYPES = {
+  CHAT: 2,
+  CALL: 4,
+  NOTE: 8,
+  EMAIL: 11,
+  FB_CHAT: 13,
+  WECHAT: 14,
+  TICKET: 15,
+  SMS: 17,
+  SCREEN_SHARE: 24,
+  IG_CHAT: 27,
+  WHATSAPP: 29,
+  EMAIL_CONVERSATION: 21,
+} as const;
+
+/** Human-readable label for an activity type ID. */
+function activityTypeLabel(eatyId?: number): string {
+  switch (eatyId) {
+    case ACTIVITY_TYPES.CHAT: return "Chat";
+    case ACTIVITY_TYPES.CALL: return "Call";
+    case ACTIVITY_TYPES.NOTE: return "Note";
+    case ACTIVITY_TYPES.EMAIL: return "Email";
+    case ACTIVITY_TYPES.FB_CHAT: return "FB Chat";
+    case ACTIVITY_TYPES.WECHAT: return "WeChat";
+    case ACTIVITY_TYPES.SMS: return "SMS";
+    case ACTIVITY_TYPES.SCREEN_SHARE: return "Screen Share";
+    case ACTIVITY_TYPES.IG_CHAT: return "IG Chat";
+    case ACTIVITY_TYPES.WHATSAPP: return "WhatsApp";
+    default: return "Activity";
+  }
+}
+
 function requireAuth(): ItxClient {
   if (!isConfigured()) {
     printError('Not configured. Run "itx config set" first.');
     process.exit(1);
   }
   return new ItxClient();
+}
+
+/** Extract a translated name, falling back to defaultText. */
+function translateName(nameObj: Record<string, unknown> | undefined): string {
+  if (!nameObj) return "";
+  const translations = nameObj.translations as
+    | Record<string, { translatedText?: string }>
+    | undefined;
+  return (
+    translations?.en?.translatedText ??
+    (nameObj.defaultText as string) ??
+    ""
+  );
+}
+
+/** Build a display name from a member's user or entity. */
+function memberName(member: Record<string, unknown>): string {
+  const user = member.user as
+    | { firstName?: string; lastName?: string }
+    | undefined;
+  if (user?.firstName || user?.lastName) {
+    return [user.firstName, user.lastName].filter(Boolean).join(" ");
+  }
+  const ext = member.entityExtension as
+    | { entity?: { name1?: string; name2?: string } }
+    | undefined;
+  if (ext?.entity?.name1 || ext?.entity?.name2) {
+    return [ext.entity.name1, ext.entity.name2].filter(Boolean).join(" ");
+  }
+  return (member.name as string) ?? "(unknown)";
+}
+
+/** Strip HTML to plain text. */
+function htmlToText(html: string): string {
+  return html
+    .replace(/\r\n?/g, "\n")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p><p[^>]*>/gi, "\n")
+    .replace(/<\/?(p|div|tr|li|ul|ol|blockquote|h[1-6])[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&ldquo;/g, "\u201C")
+    .replace(/&rdquo;/g, "\u201D")
+    .replace(/&lsquo;/g, "\u2018")
+    .replace(/&rsquo;/g, "\u2019")
+    .replace(/&mdash;/g, "\u2014")
+    .replace(/&ndash;/g, "\u2013")
+    .replace(/&#\d+;/g, "")
+    .replace(/[\uFEFF\u200B\u200C\u200D\u00AD\u00A0]/g, " ")
+    .replace(/^[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Format seconds as human-readable duration. */
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
 export function registerTicketCommands(program: Command): void {
@@ -43,13 +144,11 @@ export function registerTicketCommands(program: Command): void {
     .action(async (opts: { limit: string; offset: string; json: boolean }) => {
       const client = requireAuth();
       try {
-        const data = await client.request<{ activities?: Record<string, unknown>[]; totalActivityCount?: number }>(
-          "/rest/itxems/activities",
+        const data = await client.request<Record<string, unknown>[]>(
+          "/rest/itxems/cases",
           {
             params: {
-              eatyId: TICKET_ACTIVITY_TYPE,
               getMembers: true,
-              getTotalActivityCount: true,
               limitFrom: Number(opts.offset),
               limitTo: Number(opts.limit),
             },
@@ -61,20 +160,23 @@ export function registerTicketCommands(program: Command): void {
           return;
         }
 
-        const activities = data.activities ?? [];
-        if (data.totalActivityCount !== undefined) {
-          printInfo(`Total tickets: ${data.totalActivityCount}`);
-        }
+        const cases = data ?? [];
+        printInfo(`Showing ${cases.length} tickets`);
 
         printTable(
-          activities.map((a) => ({
-            id: a.id,
-            subject: a.subject ?? a.name ?? "",
-            status: a.status ?? "",
-            created: a.createdTs
-              ? new Date(a.createdTs as string).toLocaleDateString()
-              : "",
-          })),
+          cases.map((c) => {
+            const status = c.emsStatus as
+              | { name?: Record<string, unknown> }
+              | undefined;
+            return {
+              id: c.seqNo,
+              subject: c.description ?? "",
+              status: translateName(status?.name),
+              created: c.creationTs
+                ? new Date(c.creationTs as string).toLocaleDateString()
+                : "",
+            };
+          }),
           [
             { key: "id", label: "ID", width: 10 },
             { key: "subject", label: "Subject", width: 40 },
@@ -90,38 +192,54 @@ export function registerTicketCommands(program: Command): void {
 
   ticket
     .command("get <id>")
-    .description("Get details of a specific ticket")
+    .description("Get details of a specific ticket by case number")
     .option("--json", "Output raw JSON")
     .action(async (id: string, opts: { json: boolean }) => {
       const client = requireAuth();
       try {
-        const data = await client.request<Record<string, unknown>>(
-          `/rest/itxems/activities/${id}`,
-          {
-            params: {
-              getMembers: true,
-            },
+        const result = await client.request<
+          Record<string, unknown> | Record<string, unknown>[]
+        >("/rest/itxems/cases", {
+          params: {
+            seqNo: Number(id),
+            getMembers: true,
           },
-        );
+        });
+
+        const data = Array.isArray(result) ? result[0] : result;
+        if (!data) {
+          printError(`Ticket #${id} not found.`);
+          process.exit(1);
+        }
 
         if (opts.json) {
           printJson(data);
           return;
         }
 
-        console.log(`ID:       ${data.id}`);
-        console.log(`Subject:  ${data.subject ?? data.name ?? ""}`);
-        console.log(`Status:   ${data.status ?? ""}`);
+        const status = data.emsStatus as
+          | { name?: Record<string, unknown> }
+          | undefined;
+        const priority = data.priority as
+          | { name?: Record<string, unknown> }
+          | undefined;
+        const category = data.category as
+          | { name?: Record<string, unknown> }
+          | undefined;
+
+        console.log(`ID:        #${data.seqNo}`);
+        console.log(`Subject:   ${data.description ?? ""}`);
+        console.log(`Status:    ${translateName(status?.name)}`);
+        console.log(`Priority:  ${translateName(priority?.name)}`);
+        console.log(`Category:  ${translateName(category?.name)}`);
         console.log(
-          `Created:  ${data.createdTs ? new Date(data.createdTs as string).toISOString() : ""}`,
+          `Created:   ${data.creationTs ? new Date(data.creationTs as string).toISOString() : ""}`,
         );
         console.log(
-          `Modified: ${data.modifiedTs ? new Date(data.modifiedTs as string).toISOString() : ""}`,
+          `Modified:  ${data.updateTs ? new Date(data.updateTs as string).toISOString() : ""}`,
         );
 
-        const members = data.members as
-          | { role?: number; name?: string; anon?: boolean }[]
-          | undefined;
+        const members = data.members as Record<string, unknown>[] | undefined;
         if (members?.length) {
           console.log("\nMembers:");
           for (const m of members) {
@@ -133,7 +251,9 @@ export function registerTicketCommands(program: Command): void {
                   : m.role === ROLES.CONTACT_PERSON
                     ? "Contact"
                     : `Role ${m.role}`;
-            console.log(`  - ${m.name ?? "(unknown)"} [${roleLabel}]${m.anon ? " (external)" : ""}`);
+            console.log(
+              `  - ${memberName(m)} [${roleLabel}]${m.anon ? " (external)" : ""}`,
+            );
           }
         }
       } catch (err) {
@@ -146,29 +266,19 @@ export function registerTicketCommands(program: Command): void {
     .command("create")
     .description("Create a new ticket")
     .requiredOption("-s, --subject <text>", "Ticket subject")
-    .option("-d, --description <text>", "Ticket description")
     .option("--json", "Output raw JSON")
     .action(
       async (opts: {
         subject: string;
-        description?: string;
         json: boolean;
       }) => {
         const client = requireAuth();
         try {
-          const body: Record<string, unknown> = {
-            activityType: TICKET_ACTIVITY_TYPE,
-            subject: opts.subject,
-          };
-          if (opts.description) {
-            body.description = opts.description;
-          }
-
           const data = await client.request<Record<string, unknown>>(
-            "/rest/itxems/activities",
+            "/rest/itxems/cases",
             {
               method: "POST",
-              body,
+              body: { description: opts.subject },
             },
           );
 
@@ -177,7 +287,7 @@ export function registerTicketCommands(program: Command): void {
             return;
           }
 
-          printSuccess(`Ticket created: ${data.id}`);
+          printSuccess(`Ticket created: #${data.seqNo}`);
         } catch (err) {
           printError(err instanceof Error ? err.message : String(err));
           process.exit(1);
@@ -206,8 +316,8 @@ export function registerTicketCommands(program: Command): void {
       ) => {
         const client = requireAuth();
         try {
-          const body: Record<string, unknown> = {};
-          if (opts.subject) body.subject = opts.subject;
+          const body: Record<string, unknown> = { seqNo: Number(id) };
+          if (opts.subject) body.description = opts.subject;
           if (opts.status) body.status = opts.status;
           if (opts.category) body.category = opts.category;
           if (opts.assignee) {
@@ -216,7 +326,7 @@ export function registerTicketCommands(program: Command): void {
             ];
           }
 
-          if (Object.keys(body).length === 0) {
+          if (Object.keys(body).length <= 1) {
             printError(
               "Provide at least one field to update (--subject, --status, --category, --assignee).",
             );
@@ -224,7 +334,7 @@ export function registerTicketCommands(program: Command): void {
           }
 
           const data = await client.request<Record<string, unknown>>(
-            `/rest/itxems/activities/${id}`,
+            "/rest/itxems/cases",
             {
               method: "PUT",
               body,
@@ -236,7 +346,7 @@ export function registerTicketCommands(program: Command): void {
             return;
           }
 
-          printSuccess(`Ticket ${id} updated.`);
+          printSuccess(`Ticket #${id} updated.`);
         } catch (err) {
           printError(err instanceof Error ? err.message : String(err));
           process.exit(1);
@@ -252,31 +362,252 @@ export function registerTicketCommands(program: Command): void {
     .action(async (id: string, opts: { json: boolean }) => {
       const client = requireAuth();
       try {
-        const data = await client.request<{
-          comments?: Record<string, unknown>[];
-        }>(`/rest/itxems/activities/${id}/comments`);
+        // 1. Fetch case by seqNo to get eactId + comments
+        const result = await client.request<
+          Record<string, unknown> | Record<string, unknown>[]
+        >("/rest/itxems/cases", {
+          params: { seqNo: Number(id), getComments: true },
+        });
+
+        const caseData = Array.isArray(result) ? result[0] : result;
+        if (!caseData) {
+          printError(`Ticket #${id} not found.`);
+          process.exit(1);
+        }
+
+        const eactId = caseData.eactId as number;
+        const texts = caseData.texts as Record<string, unknown>[] | undefined;
+
+        // 2. Fetch case with links via search endpoint
+        const fullCaseResult = await client.request<
+          Record<string, unknown> | Record<string, unknown>[]
+        >("/rest/itxems/cases/search", {
+          method: "POST",
+          body: { eactIds: [eactId] },
+        });
+
+        const fullCase = Array.isArray(fullCaseResult)
+          ? fullCaseResult[0]
+          : fullCaseResult;
+
+        // 3. Extract linked activity IDs from case links
+        const links = ((fullCase?.links ?? []) as Record<string, unknown>[]);
+        const caseLinks = links.filter((link) => {
+          const to = link.to as { eactId?: number } | undefined;
+          return link.type === LINK_TYPES.CASE && to?.eactId === eactId;
+        });
+        const linkedActivityIds = caseLinks.map(
+          (link) => (link.from as { eactId: number }).eactId,
+        );
+
+        // 4. Fetch linked activities
+        let activities: Record<string, unknown>[] = [];
+        if (linkedActivityIds.length > 0) {
+          const actResult = await client.request<Record<string, unknown>[]>(
+            "/rest/itxems/activities/search",
+            {
+              method: "POST",
+              body: { eactIds: linkedActivityIds, getMembers: true },
+            },
+          );
+          activities = actResult ?? [];
+
+          // 5. Resolve email conversations to individual emails
+          const emailConversations = activities.filter(
+            (a) =>
+              (a.activityType as { eatyId?: number })?.eatyId ===
+              ACTIVITY_TYPES.EMAIL_CONVERSATION,
+          );
+
+          for (const conv of emailConversations) {
+            const emails = await client.request<Record<string, unknown>[]>(
+              "/rest/itxems/activities/search",
+              {
+                method: "POST",
+                body: {
+                  activityLinkFilters: [
+                    {
+                      eactIds: [conv.eactId],
+                      linkTypes: [LINK_TYPES.CONVERSATION],
+                      linkDirection: "FROM",
+                    },
+                  ],
+                  getMembers: true,
+                },
+              },
+            );
+            activities = activities.filter(
+              (a) => a.eactId !== conv.eactId,
+            );
+            activities.push(...(emails ?? []));
+          }
+        }
+
+        // Sort activities by creation timestamp
+        activities.sort((a, b) => {
+          const aTs = new Date((a.creationTs as string) ?? 0).getTime();
+          const bTs = new Date((b.creationTs as string) ?? 0).getTime();
+          return aTs - bTs;
+        });
+
+        // Fetch email body content for all email activities
+        const emailActivities = activities.filter(
+          (a) =>
+            (a.activityType as { eatyId?: number })?.eatyId ===
+            ACTIVITY_TYPES.EMAIL,
+        );
+        const emailBodies = new Map<number, string>();
+        await Promise.all(
+          emailActivities.map(async (email) => {
+            try {
+              const html = await client.request<string>(
+                "/rest/itxems/emailcontent",
+                { params: { eactId: email.eactId as number } },
+              );
+              emailBodies.set(
+                email.eactId as number,
+                typeof html === "string" ? htmlToText(html) : "",
+              );
+            } catch {
+              // Email content may not be available
+            }
+          }),
+        );
 
         if (opts.json) {
-          printJson(data);
+          const enriched = activities.map((a) => ({
+            ...a,
+            _emailBody: emailBodies.get(a.eactId as number),
+          }));
+          printJson({ activities: enriched, comments: texts ?? [] });
           return;
         }
 
-        const comments = data.comments ?? [];
-        if (comments.length === 0) {
+        if (!activities.length && !texts?.length) {
           printInfo("No activities or comments.");
           return;
         }
 
-        for (const c of comments) {
-          const date = c.createdTs
-            ? new Date(c.createdTs as string).toLocaleString()
-            : "";
-          const author = c.createdBy ?? c.author ?? "(unknown)";
-          console.log(
-            `[${date}] ${author as string}:`,
-          );
-          console.log(`  ${c.text ?? c.body ?? ""}`);
-          console.log();
+        // Display communication activities
+        if (activities.length) {
+          printInfo(`${activities.length} activities:`);
+          for (const act of activities) {
+            const actType = act.activityType as
+              | { eatyId?: number }
+              | undefined;
+            const eatyId = actType?.eatyId;
+            const typeLabel = activityTypeLabel(eatyId);
+            const dir = act.direction as number | undefined;
+            const dirArrow = dir === 1 ? "->" : dir === 2 ? "<-" : "";
+            const date = act.creationTs
+              ? new Date(act.creationTs as string).toLocaleString()
+              : "";
+
+            console.log(`--- [${typeLabel} ${dirArrow}] ${date} ---`);
+
+            if (eatyId === ACTIVITY_TYPES.EMAIL) {
+              const fromMail = (act.fromMail as string) ?? "";
+              const toMail = (act.toMail as string) ?? "";
+              const subject = (act.subject as string) ?? "";
+              const sender = act.sender as
+                | { firstName?: string; lastName?: string }
+                | undefined;
+              const senderName = sender
+                ? [sender.firstName, sender.lastName]
+                    .filter(Boolean)
+                    .join(" ")
+                : "";
+
+              console.log(
+                `From:    ${fromMail}${senderName ? ` (${senderName})` : ""}`,
+              );
+              console.log(`To:      ${toMail}`);
+              console.log(`Subject: ${subject}`);
+
+              const body = emailBodies.get(act.eactId as number);
+              if (body) {
+                console.log();
+                console.log(body);
+              }
+            } else if (eatyId === ACTIVITY_TYPES.CALL) {
+              const src = (act.srcNumber as string) ?? "";
+              const dst = (act.dstNumber as string) ?? "";
+              const members = act.members as
+                | Record<string, unknown>[]
+                | undefined;
+              const agent = members?.find(
+                (m) => !(m.anon as boolean) && (m.role as number) === 0,
+              );
+              const contact = members?.find((m) => m.anon);
+
+              console.log(
+                `From:     ${src}${agent ? ` (${memberName(agent)})` : ""}`,
+              );
+              console.log(
+                `To:       ${dst}${contact ? ` (${memberName(contact)})` : ""}`,
+              );
+
+              const startTs = act.startTs as string | undefined;
+              const endTs = act.endTs as string | undefined;
+              if (startTs && endTs) {
+                const dur = Math.round(
+                  (new Date(endTs).getTime() -
+                    new Date(startTs).getTime()) /
+                    1000,
+                );
+                console.log(`Duration: ${formatDuration(dur)}`);
+              }
+
+              const recordings = act.recordings as
+                | Record<string, unknown>[]
+                | undefined;
+              if (recordings?.length) {
+                console.log(`Recordings: ${recordings.length}`);
+              }
+            } else {
+              // Generic activity
+              const members = act.members as
+                | Record<string, unknown>[]
+                | undefined;
+              const contact = members?.find((m) => m.anon);
+              if (contact) {
+                console.log(`Contact: ${memberName(contact)}`);
+              }
+              const desc = (act.description as string) ?? "";
+              if (desc) console.log(`Note: ${desc}`);
+            }
+
+            // Show attachments
+            const files = act.coreFileReferences as
+              | { cfreId?: number; type?: number; name?: string }[]
+              | undefined;
+            if (files?.length) {
+              console.log(
+                `Attachments: ${files.map((f) => f.name ?? `file#${f.cfreId}`).join(", ")}`,
+              );
+            }
+
+            console.log();
+          }
+        }
+
+        // Display comments
+        if (texts?.length) {
+          printInfo(`${texts.length} comments:`);
+          for (const t of texts) {
+            const date = t.creationTs
+              ? new Date(t.creationTs as string).toLocaleString()
+              : "";
+            const creator = t.creator as
+              | { firstName?: string; lastName?: string }
+              | undefined;
+            const author = creator
+              ? [creator.firstName, creator.lastName].filter(Boolean).join(" ")
+              : "(unknown)";
+            console.log(`  [${date}] ${author}:`);
+            console.log(`    ${htmlToText((t.text as string) ?? "")}`);
+            console.log();
+          }
         }
       } catch (err) {
         printError(err instanceof Error ? err.message : String(err));
@@ -297,10 +628,10 @@ export function registerTicketCommands(program: Command): void {
         const client = requireAuth();
         try {
           const data = await client.request<Record<string, unknown>>(
-            `/rest/itxems/activities/${id}/comments`,
+            "/rest/itxems/cases/comments",
             {
               method: "POST",
-              body: { text: opts.message },
+              body: { seqNo: Number(id), text: opts.message },
             },
           );
 
@@ -309,7 +640,7 @@ export function registerTicketCommands(program: Command): void {
             return;
           }
 
-          printSuccess(`Comment added to ticket ${id}.`);
+          printSuccess(`Comment added to ticket #${id}.`);
         } catch (err) {
           printError(err instanceof Error ? err.message : String(err));
           process.exit(1);
