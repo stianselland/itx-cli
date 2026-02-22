@@ -2,7 +2,7 @@
 
 A command-line interface for the [ITX Portal API](https://apidoc.itxuc.com/). Manage support tickets, view full communication histories, comment with @mentions, and assign tickets — all without leaving your terminal.
 
-[ITX](https://www.intelecom.no/) is a unified communications and contact center platform used for customer support. If you're a developer handling escalated support tickets (2nd-line), this CLI gives you fast access to the context you need: emails, calls, chats, WhatsApp messages, and internal comments. Every command supports `--json` output, making it a natural fit for AI agents like [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that can read ticket histories, summarize customer issues, and draft responses on your behalf.
+[ITX](https://itx.no/) is a unified communications and contact center platform used for customer support. If you're a developer handling escalated support tickets (2nd-line), this CLI gives you fast access to the context you need: emails, calls, chats, WhatsApp messages, and internal comments. Every command supports `--json` output, making it a natural fit for AI agents like [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that can read ticket histories, summarize customer issues, and draft responses on your behalf.
 
 ## Quick Start
 
@@ -184,6 +184,12 @@ itx config show                    Show stored configuration values
 itx config show --reveal           Show full token values (unmasked)
 ```
 
+## Disclaimer
+
+This is an **unofficial, community-built tool**. It is not developed, endorsed, or supported by [ITX](https://itx.no/). ITX and related trademarks are the property of their respective owners.
+
+This tool interacts with the ITX Portal API using your own authenticated credentials. You are responsible for complying with your organization's ITX service agreement and acceptable use policies. The authors assume no liability for any consequences of using this tool.
+
 ## License
 
-ISC
+[MIT](LICENSE)
