@@ -7,8 +7,10 @@ import {
   getAliases,
   setAlias,
 } from "../lib/config.js";
-import { registerConfigCommands } from "../commands/config.js";
+import { registerConfigCommands, parseApiKey } from "../commands/config.js";
 import { registerTicketCommands, ROLES } from "../commands/ticket.js";
+import { registerUserCommands } from "../commands/user.js";
+import { registerAliasCommands } from "../commands/alias.js";
 
 afterEach(() => {
   clearConfig();
@@ -120,10 +122,53 @@ describe("config commands", () => {
   });
 });
 
+describe("parseApiKey", () => {
+  it("parses full API key with leading ?", () => {
+    const result = parseApiKey("?tokenv2=abc123&rcntrl=1407055&ccntrl=60000654");
+    expect(result).toEqual({
+      tokenv2: "abc123",
+      rcntrl: "1407055",
+      ccntrl: "60000654",
+    });
+  });
+
+  it("parses API key without leading ?", () => {
+    const result = parseApiKey("tokenv2=abc123&rcntrl=100&ccntrl=200");
+    expect(result).toEqual({
+      tokenv2: "abc123",
+      rcntrl: "100",
+      ccntrl: "200",
+    });
+  });
+
+  it("handles whitespace around input", () => {
+    const result = parseApiKey("  ?tokenv2=abc123&rcntrl=1&ccntrl=2  ");
+    expect(result).toEqual({
+      tokenv2: "abc123",
+      rcntrl: "1",
+      ccntrl: "2",
+    });
+  });
+
+  it("returns null if tokenv2 is missing", () => {
+    expect(parseApiKey("?rcntrl=1&ccntrl=2")).toBeNull();
+  });
+
+  it("defaults rcntrl and ccntrl to empty string if missing", () => {
+    const result = parseApiKey("?tokenv2=abc123");
+    expect(result).toEqual({
+      tokenv2: "abc123",
+      rcntrl: "",
+      ccntrl: "",
+    });
+  });
+});
+
 describe("ticket commands", () => {
   beforeEach(() => {
     setConfig({
       ssoEndpoint: "https://sso.test.com",
+      activeEndpoint: "https://sso.test.com",
       tokenv2: "test-token",
     });
   });
@@ -477,10 +522,16 @@ describe("ticket commands", () => {
     expect(output.comments).toEqual([{ text: "hi" }]);
   });
 
-  it("ticket comment sends POST with message", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      jsonResponse({ id: 100 }),
-    );
+  it("ticket comment without mention uses activitytexts endpoint", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        // GET case by seqNo
+        jsonResponse([{ eactId: 1000, seqNo: 42 }]),
+      )
+      .mockResolvedValueOnce(
+        // POST activitytexts
+        jsonResponse({ eateId: 999 }),
+      );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -497,13 +548,215 @@ describe("ticket commands", () => {
       "This is my comment",
     ]);
 
-    const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/rest/itxems/cases/comments");
-    expect(opts.method).toBe("POST");
+    // First call: fetch case
+    const call1Url = mockFetch.mock.calls[0][0] as string;
+    expect(call1Url).toContain("/rest/itxems/cases");
+    expect(call1Url).toContain("seqNo=42");
 
-    const body = JSON.parse(opts.body as string);
-    expect(body.seqNo).toBe(42);
-    expect(body.text).toBe("This is my comment");
+    // Second call: POST activitytexts
+    const [url2, opts2] = mockFetch.mock.calls[1];
+    expect(url2).toContain("/rest/itxems/activitytexts");
+    expect(opts2.method).toBe("POST");
+
+    const body = JSON.parse(opts2.body as string);
+    expect(body.text).toBe("<p>This is my comment</p>");
+    expect(body.activity).toEqual({ eactId: 1000 });
+    expect(body.data).toBeUndefined();
+  });
+
+  it("ticket comment --mention with alias resolves user and sends tags", async () => {
+    setAlias("dave", "dave@company.com");
+
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        // GET case by seqNo
+        jsonResponse([{ eactId: 1000, seqNo: 42 }]),
+      )
+      .mockResolvedValueOnce(
+        // POST users/search
+        jsonResponse([
+          { userId: 123, firstName: "Dave", lastName: "Smith", email: "dave@company.com", active: 1 },
+          { userId: 456, firstName: "Alice", lastName: "Jones", email: "alice@company.com", active: 1 },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        // POST activitytexts
+        jsonResponse({ eateId: 999 }),
+      );
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "comment",
+      "42",
+      "-m",
+      "Please look at this",
+      "--mention",
+      "dave",
+    ]);
+
+    // Verify activitytexts call
+    const [url3, opts3] = mockFetch.mock.calls[2];
+    expect(url3).toContain("/rest/itxems/activitytexts");
+
+    const body = JSON.parse(opts3.body as string);
+    expect(body.text).toContain("@Dave Smith");
+    expect(body.text).toContain("Please look at this");
+    expect(body.text).toContain("\uFEFF");
+    expect(body.activity).toEqual({ eactId: 1000 });
+    expect(body.data.tags).toHaveLength(1);
+    expect(body.data.tags[0]).toEqual({
+      startIndex: 4,
+      length: 11, // "@Dave Smith"
+      type: "user",
+      data: "123",
+    });
+  });
+
+  it("ticket comment --mention with email resolves user", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        jsonResponse([{ eactId: 2000, seqNo: 10 }]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([
+          { userId: 789, firstName: "Alice", lastName: "Jones", email: "alice@company.com", active: 1 },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ eateId: 888 }),
+      );
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "comment",
+      "10",
+      "-m",
+      "Check this",
+      "--mention",
+      "alice@company.com",
+    ]);
+
+    const body = JSON.parse(mockFetch.mock.calls[2][1].body as string);
+    expect(body.text).toContain("@Alice Jones");
+    expect(body.data.tags[0].data).toBe("789");
+  });
+});
+
+describe("user commands", () => {
+  beforeEach(() => {
+    setConfig({
+      ssoEndpoint: "https://sso.test.com",
+      activeEndpoint: "https://sso.test.com",
+      tokenv2: "test-token",
+    });
+  });
+
+  it("user list displays table of users", async () => {
+    const users = [
+      { userId: 1, firstName: "Alice", lastName: "Smith", email: "alice@co.com", active: 1 },
+      { userId: 2, firstName: "Bob", lastName: "Jones", email: "bob@co.com", active: 0 },
+    ];
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(users));
+    vi.stubGlobal("fetch", mockFetch);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerUserCommands(program);
+
+    await program.parseAsync(["node", "itx", "user", "list"]);
+
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain("/rest/core/users/search");
+
+    const output = spy.mock.calls.map((c) => c[0] ?? c.join(" ")).join("\n");
+    expect(output).toContain("Alice Smith");
+    expect(output).toContain("alice@co.com");
+    expect(output).toContain("Bob Jones");
+  });
+
+  it("user list --json outputs raw JSON", async () => {
+    const users = [
+      { userId: 1, firstName: "Alice", lastName: "Smith", email: "alice@co.com", active: 1 },
+    ];
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(users));
+    vi.stubGlobal("fetch", mockFetch);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerUserCommands(program);
+
+    await program.parseAsync(["node", "itx", "user", "list", "--json"]);
+
+    const output = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(output).toHaveLength(1);
+    expect(output[0].firstName).toBe("Alice");
+  });
+});
+
+describe("top-level alias commands", () => {
+  it("alias set creates an alias", async () => {
+    const program = createProgram();
+    registerAliasCommands(program);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "alias",
+      "set",
+      "dave",
+      "dave@company.com",
+    ]);
+
+    expect(getAliases()).toEqual({ dave: "dave@company.com" });
+  });
+
+  it("alias list shows aliases", async () => {
+    setAlias("dave", "dave@company.com");
+    setAlias("alice", "alice@company.com");
+
+    const program = createProgram();
+    registerAliasCommands(program);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await program.parseAsync(["node", "itx", "alias", "list"]);
+
+    const output = spy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).toContain("dave");
+    expect(output).toContain("dave@company.com");
+    expect(output).toContain("alice");
+  });
+
+  it("alias remove deletes an alias", async () => {
+    setAlias("dave", "dave@company.com");
+
+    const program = createProgram();
+    registerAliasCommands(program);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "alias",
+      "remove",
+      "dave",
+    ]);
+
+    expect(getAliases()).toEqual({});
   });
 });
 

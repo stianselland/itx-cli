@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { isConfigured, resolveAlias } from "../lib/config.js";
-import { ItxClient } from "../lib/client.js";
+import { ItxClient, type ItxUser } from "../lib/client.js";
 import {
   printTable,
   printJson,
@@ -57,7 +57,7 @@ function activityTypeLabel(eatyId?: number): string {
 
 function requireAuth(): ItxClient {
   if (!isConfigured()) {
-    printError('Not configured. Run "itx config set" first.');
+    printError('Not configured. Run "itx login" first.');
     process.exit(1);
   }
   return new ItxClient();
@@ -619,24 +619,66 @@ export function registerTicketCommands(program: Command): void {
     .command("comment <id>")
     .description("Add a comment to a ticket")
     .requiredOption("-m, --message <text>", "Comment text")
+    .option("--mention <user...>", "Mention users by alias or email (repeatable)")
     .option("--json", "Output raw JSON")
     .action(
       async (
         id: string,
-        opts: { message: string; json: boolean },
+        opts: { message: string; mention?: string[]; json: boolean },
       ) => {
         const client = requireAuth();
         try {
-          const data = await client.request<Record<string, unknown>>(
-            "/rest/itxems/cases/comments",
-            {
-              method: "POST",
-              body: { seqNo: Number(id), text: opts.message },
-            },
-          );
+          // Fetch case by seqNo to get eactId
+          const result = await client.request<
+            Record<string, unknown> | Record<string, unknown>[]
+          >("/rest/itxems/cases", {
+            params: { seqNo: Number(id) },
+          });
+
+          const caseData = Array.isArray(result) ? result[0] : result;
+          if (!caseData) {
+            printError(`Ticket #${id} not found.`);
+            process.exit(1);
+          }
+
+          const eactId = caseData.eactId as number;
+
+          // Build text and tags for mentions
+          let mentionPrefix = "";
+          const tags: { startIndex: number; length: number; type: string; data: string }[] = [];
+
+          if (opts.mention?.length) {
+            const users = await client.searchUsers();
+
+            for (const mentionInput of opts.mention) {
+              const resolved = resolveAlias(mentionInput);
+              const user = findUser(users, resolved);
+              if (!user) {
+                printError(`User not found for: ${mentionInput}`);
+                process.exit(1);
+              }
+
+              const displayName = `@${user.firstName} ${user.lastName}`;
+              // startIndex is position of @ in the full HTML string
+              // prefix so far + "<p>" = 3 chars, plus existing mentionPrefix
+              const startIndex = 3 + mentionPrefix.length + 1; // +1 for leading \uFEFF
+              tags.push({
+                startIndex,
+                length: displayName.length,
+                type: "user",
+                data: String(user.userId),
+              });
+              mentionPrefix += `\uFEFF${displayName}\uFEFF `;
+            }
+          }
+
+          const text = `<p>${mentionPrefix}${opts.message}</p>`;
+          const data = tags.length > 0 ? { tags } : undefined;
+
+          const response = await client.addActivityText(eactId, text, data);
 
           if (opts.json) {
-            printJson(data);
+            printJson(response);
             return;
           }
 
@@ -647,4 +689,21 @@ export function registerTicketCommands(program: Command): void {
         }
       },
     );
+}
+
+function findUser(users: ItxUser[], emailOrName: string): ItxUser | undefined {
+  // Try exact email match first
+  const byEmail = users.find(
+    (u) => u.email?.toLowerCase() === emailOrName.toLowerCase(),
+  );
+  if (byEmail) return byEmail;
+
+  // Try name match (firstName lastName)
+  const lower = emailOrName.toLowerCase();
+  return users.find(
+    (u) =>
+      `${u.firstName} ${u.lastName}`.toLowerCase() === lower ||
+      u.firstName?.toLowerCase() === lower ||
+      u.lastName?.toLowerCase() === lower,
+  );
 }

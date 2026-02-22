@@ -1,3 +1,4 @@
+import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import {
   getConfig,
@@ -12,7 +13,53 @@ import {
 import { ItxClient } from "../lib/client.js";
 import { printError, printSuccess, printInfo, printJson } from "../lib/output.js";
 
+const DEFAULT_SSO_ENDPOINT = "https://app.itxuc.com";
+
+/** Parse an ITX API key string like `?tokenv2=...&rcntrl=...&ccntrl=...` */
+export function parseApiKey(input: string): { tokenv2: string; rcntrl: string; ccntrl: string } | null {
+  const trimmed = input.trim();
+  // Accept with or without leading ?
+  const qs = trimmed.startsWith("?") ? trimmed.slice(1) : trimmed;
+  const params = new URLSearchParams(qs);
+  const tokenv2 = params.get("tokenv2");
+  if (!tokenv2) return null;
+  return {
+    tokenv2,
+    rcntrl: params.get("rcntrl") ?? "",
+    ccntrl: params.get("ccntrl") ?? "",
+  };
+}
+
+async function prompt(question: string, defaultValue?: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const suffix = defaultValue ? ` (${defaultValue})` : "";
+  const answer = await rl.question(`${question}${suffix}: `);
+  rl.close();
+  return answer.trim() || defaultValue || "";
+}
+
 export function registerConfigCommands(program: Command): void {
+  // Top-level interactive login command
+  program
+    .command("login")
+    .description("Log in with your ITX API key")
+    .action(async () => {
+      const apiKeyInput = await prompt("Paste API key (?tokenv2=...&rcntrl=...&ccntrl=...)");
+      const parsed = parseApiKey(apiKeyInput);
+      if (!parsed) {
+        printError("Invalid API key. Expected format: ?tokenv2=...&rcntrl=...&ccntrl=...");
+        process.exit(1);
+      }
+
+      setConfig({
+        ssoEndpoint: DEFAULT_SSO_ENDPOINT,
+        tokenv2: parsed.tokenv2,
+        rcntrl: parsed.rcntrl,
+        ccntrl: parsed.ccntrl,
+      });
+      printSuccess("Logged in.");
+    });
+
   const config = program.command("config").description("Manage ITX CLI configuration");
 
   config
@@ -65,7 +112,7 @@ export function registerConfigCommands(program: Command): void {
     .description("Test connectivity by resolving the active endpoint and fetching the active user")
     .action(async () => {
       if (!isConfigured()) {
-        printError('Not configured. Run "itx config set" first.');
+        printError('Not configured. Run "itx login" first.');
         process.exit(1);
       }
 

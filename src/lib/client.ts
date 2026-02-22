@@ -6,20 +6,30 @@ interface RequestOptions {
   params?: Record<string, string | number | boolean | undefined>;
 }
 
+export interface ItxUser {
+  userId: number;
+  firstName: string;
+  lastName: string;
+  email: string;
+  active: number;
+}
+
 export class ItxClient {
   private endpoint: string;
   private authParams: Record<string, string>;
+  private resolved: boolean;
 
   constructor() {
     const config = getConfig();
 
     if (!config.tokenv2) {
       throw new Error(
-        'Not authenticated. Run "itx config set" to configure credentials.',
+        'Not authenticated. Run "itx login" to configure credentials.',
       );
     }
 
     this.endpoint = config.activeEndpoint || config.ssoEndpoint;
+    this.resolved = Boolean(config.activeEndpoint);
     this.authParams = {
       tokenv2: config.tokenv2,
       rcntrl: config.rcntrl,
@@ -65,12 +75,49 @@ export class ItxClient {
   }
 
   /**
+   * Search for users.
+   */
+  async searchUsers(): Promise<ItxUser[]> {
+    return this.request<ItxUser[]>("/rest/core/users/search", {
+      method: "POST",
+      body: {},
+    });
+  }
+
+  /**
+   * Add an activity text (comment with optional mention tags).
+   */
+  async addActivityText(
+    eactId: number,
+    text: string,
+    data?: { tags: { startIndex: number; length: number; type: string; data: string }[] },
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = {
+      text,
+      activity: { eactId },
+    };
+    if (data) {
+      body.data = data;
+    }
+    return this.request("/rest/itxems/activitytexts", {
+      method: "POST",
+      body,
+    });
+  }
+
+  /**
    * Make an authenticated request to the ITX API.
+   * Auto-resolves the active endpoint on first call if needed.
    */
   async request<T = unknown>(
     path: string,
     options: RequestOptions = {},
   ): Promise<T> {
+    if (!this.resolved) {
+      await this.resolveEndpoint();
+      this.resolved = true;
+    }
+
     const { method = "GET", body, params } = options;
 
     const searchParams = new URLSearchParams(this.authParams);

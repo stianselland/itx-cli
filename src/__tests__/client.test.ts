@@ -5,6 +5,7 @@ import { ItxClient } from "../lib/client.js";
 beforeEach(() => {
   setConfig({
     ssoEndpoint: "https://sso.example.com",
+    activeEndpoint: "https://sso.example.com",
     tokenv2: "test-token",
     rcntrl: "rc-val",
     ccntrl: "cc-val",
@@ -38,6 +39,7 @@ describe("ItxClient", () => {
 
   describe("resolveEndpoint", () => {
     it("fetches active endpoint from SSO and caches it", async () => {
+      setConfig({ activeEndpoint: "" });
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({ endpoint: "https://active.example.com/" }),
@@ -54,6 +56,7 @@ describe("ItxClient", () => {
     });
 
     it("throws on non-ok response", async () => {
+      setConfig({ activeEndpoint: "" });
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue({
@@ -70,6 +73,7 @@ describe("ItxClient", () => {
     });
 
     it("throws when endpoint is missing from response", async () => {
+      setConfig({ activeEndpoint: "" });
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue({
