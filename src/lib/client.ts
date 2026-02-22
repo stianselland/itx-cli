@@ -6,26 +6,34 @@ interface RequestOptions {
   params?: Record<string, string | number | boolean | undefined>;
 }
 
+export interface ItxUser {
+  userId: number;
+  firstName: string;
+  lastName: string;
+  email: string;
+  active: number;
+}
+
 export class ItxClient {
   private endpoint: string;
-  private headers: Record<string, string>;
+  private authParams: Record<string, string>;
+  private resolved: boolean;
 
   constructor() {
     const config = getConfig();
 
     if (!config.tokenv2) {
       throw new Error(
-        'Not authenticated. Run "itx config set" to configure credentials.',
+        'Not authenticated. Run "itx login" to configure credentials.',
       );
     }
 
     this.endpoint = config.activeEndpoint || config.ssoEndpoint;
-    this.headers = {
+    this.resolved = Boolean(config.activeEndpoint);
+    this.authParams = {
       tokenv2: config.tokenv2,
       rcntrl: config.rcntrl,
       ccntrl: config.ccntrl,
-      "Content-Type": "application/json",
-      Accept: "application/json",
     };
   }
 
@@ -37,9 +45,8 @@ export class ItxClient {
     const config = getConfig();
     const ssoUrl = config.ssoEndpoint.replace(/\/$/, "");
 
-    const res = await fetch(`${ssoUrl}/rest/api/state`, {
-      headers: this.headers,
-    });
+    const qs = new URLSearchParams(this.authParams).toString();
+    const res = await fetch(`${ssoUrl}/rest/api/state?${qs}`);
 
     if (!res.ok) {
       throw new Error(
@@ -68,32 +75,68 @@ export class ItxClient {
   }
 
   /**
+   * Search for users.
+   */
+  async searchUsers(): Promise<ItxUser[]> {
+    return this.request<ItxUser[]>("/rest/core/users/search", {
+      method: "POST",
+      body: {},
+    });
+  }
+
+  /**
+   * Add an activity text (comment with optional mention tags).
+   */
+  async addActivityText(
+    eactId: number,
+    text: string,
+    data?: { tags: { startIndex: number; length: number; type: string; data: string }[] },
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = {
+      text,
+      activity: { eactId },
+    };
+    if (data) {
+      body.data = data;
+    }
+    return this.request("/rest/itxems/activitytexts", {
+      method: "POST",
+      body,
+    });
+  }
+
+  /**
    * Make an authenticated request to the ITX API.
+   * Auto-resolves the active endpoint on first call if needed.
    */
   async request<T = unknown>(
     path: string,
     options: RequestOptions = {},
   ): Promise<T> {
+    if (!this.resolved) {
+      await this.resolveEndpoint();
+      this.resolved = true;
+    }
+
     const { method = "GET", body, params } = options;
 
-    let url = `${this.endpoint}${path}`;
-
+    const searchParams = new URLSearchParams(this.authParams);
     if (params) {
-      const searchParams = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined) {
           searchParams.set(key, String(value));
         }
       }
-      const qs = searchParams.toString();
-      if (qs) {
-        url += `?${qs}`;
-      }
     }
+
+    const url = `${this.endpoint}${path}?${searchParams.toString()}`;
 
     const res = await fetch(url, {
       method,
-      headers: this.headers,
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
 
