@@ -48,12 +48,9 @@ describe("ItxClient", () => {
       const endpoint = await client.resolveEndpoint();
 
       expect(endpoint).toBe("https://active.example.com");
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://sso.example.com/rest/api/state",
-        expect.objectContaining({
-          headers: expect.objectContaining({ tokenv2: "test-token" }),
-        }),
-      );
+      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      expect(calledUrl).toContain("https://sso.example.com/rest/api/state");
+      expect(calledUrl).toContain("tokenv2=test-token");
     });
 
     it("throws on non-ok response", async () => {
@@ -89,7 +86,7 @@ describe("ItxClient", () => {
   });
 
   describe("request", () => {
-    it("makes a GET request with auth headers", async () => {
+    it("makes a GET request with auth in query params", async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         headers: new Headers({ "content-type": "application/json" }),
@@ -101,17 +98,12 @@ describe("ItxClient", () => {
       const result = await client.request("/rest/test");
 
       expect(result).toEqual({ id: 1, name: "Test" });
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://sso.example.com/rest/test",
-        expect.objectContaining({
-          method: "GET",
-          headers: expect.objectContaining({
-            tokenv2: "test-token",
-            rcntrl: "rc-val",
-            ccntrl: "cc-val",
-          }),
-        }),
-      );
+      const calledUrl = mockFetch.mock.calls[0][0] as string;
+      expect(calledUrl).toContain("https://sso.example.com/rest/test");
+      expect(calledUrl).toContain("tokenv2=test-token");
+      expect(calledUrl).toContain("rcntrl=rc-val");
+      expect(calledUrl).toContain("ccntrl=cc-val");
+      expect(mockFetch.mock.calls[0][1].method).toBe("GET");
     });
 
     it("appends query params", async () => {

@@ -25,6 +25,14 @@ function createProgram(): Command {
   return program;
 }
 
+function jsonResponse(data: unknown) {
+  return {
+    ok: true,
+    headers: new Headers({ "content-type": "application/json" }),
+    json: async () => data,
+  };
+}
+
 describe("config commands", () => {
   it("config set stores credentials", async () => {
     const program = createProgram();
@@ -127,17 +135,22 @@ describe("ticket commands", () => {
   });
 
   it("ticket list calls the API with correct params and outputs table", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({
-        activities: [
-          { id: 1, subject: "Bug report", status: "open", createdTs: "2025-01-01T00:00:00Z" },
-          { id: 2, subject: "Feature req", status: "closed", createdTs: "2025-01-02T00:00:00Z" },
-        ],
-        totalActivityCount: 2,
-      }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse([
+        {
+          seqNo: 1,
+          description: "Bug report",
+          emsStatus: { name: { defaultText: "Open" } },
+          creationTs: "2025-01-01T00:00:00Z",
+        },
+        {
+          seqNo: 2,
+          description: "Feature req",
+          emsStatus: { name: { defaultText: "Closed" } },
+          creationTs: "2025-01-02T00:00:00Z",
+        },
+      ]),
+    );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -147,24 +160,19 @@ describe("ticket commands", () => {
     await program.parseAsync(["node", "itx", "ticket", "list", "-l", "10", "-o", "5"]);
 
     const calledUrl = mockFetch.mock.calls[0][0] as string;
-    expect(calledUrl).toContain("/rest/itxems/activities");
-    expect(calledUrl).toContain("eatyId=4");
+    expect(calledUrl).toContain("/rest/itxems/cases");
+    expect(calledUrl).toContain("getMembers=true");
     expect(calledUrl).toContain("limitFrom=5");
     expect(calledUrl).toContain("limitTo=10");
   });
 
   it("ticket list --json outputs raw JSON", async () => {
-    const responseData = {
-      activities: [{ id: 1, subject: "Test" }],
-      totalActivityCount: 1,
-    };
+    const responseData = [
+      { seqNo: 1, description: "Test" },
+    ];
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => responseData,
-      }),
+      vi.fn().mockResolvedValue(jsonResponse(responseData)),
     );
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -177,23 +185,29 @@ describe("ticket commands", () => {
   });
 
   it("ticket get fetches a single ticket", async () => {
-    const ticketData = {
-      id: 42,
-      subject: "Server issue",
-      status: "open",
-      createdTs: "2025-01-01T00:00:00Z",
-      modifiedTs: "2025-01-02T00:00:00Z",
-      members: [
-        { role: 1, name: "Alice" },
-        { role: 2, name: "Bob" },
-        { role: 20, name: "Charlie", anon: true },
-      ],
-    };
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ticketData,
-    });
+    const ticketData = [
+      {
+        seqNo: 42,
+        description: "Server issue",
+        emsStatus: { name: { defaultText: "Open" } },
+        priority: { name: { defaultText: "High" } },
+        category: { name: { defaultText: "Dev" } },
+        creationTs: "2025-01-01T00:00:00Z",
+        updateTs: "2025-01-02T00:00:00Z",
+        members: [
+          { role: 1, user: { firstName: "Alice", lastName: "Smith" } },
+          { role: 2, user: { firstName: "Bob", lastName: "Jones" } },
+          {
+            role: 20,
+            anon: true,
+            entityExtension: {
+              entity: { name1: "Charlie", name2: "Brown" },
+            },
+          },
+        ],
+      },
+    ];
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(ticketData));
     vi.stubGlobal("fetch", mockFetch);
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -203,11 +217,12 @@ describe("ticket commands", () => {
     await program.parseAsync(["node", "itx", "ticket", "get", "42"]);
 
     const calledUrl = mockFetch.mock.calls[0][0] as string;
-    expect(calledUrl).toContain("/rest/itxems/activities/42");
+    expect(calledUrl).toContain("/rest/itxems/cases");
+    expect(calledUrl).toContain("seqNo=42");
 
     const output = spy.mock.calls.map((c) => c[0]).join("\n");
     expect(output).toContain("Server issue");
-    expect(output).toContain("Alice");
+    expect(output).toContain("Alice Smith");
     expect(output).toContain("[Assigned]");
     expect(output).toContain("[Follower]");
     expect(output).toContain("[Contact]");
@@ -215,11 +230,9 @@ describe("ticket commands", () => {
   });
 
   it("ticket create sends POST with subject", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: 99 }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({ seqNo: 99 }),
+    );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -233,26 +246,20 @@ describe("ticket commands", () => {
       "create",
       "-s",
       "New ticket",
-      "-d",
-      "Description here",
     ]);
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/rest/itxems/activities");
+    expect(url).toContain("/rest/itxems/cases");
     expect(opts.method).toBe("POST");
 
     const body = JSON.parse(opts.body as string);
-    expect(body.subject).toBe("New ticket");
-    expect(body.description).toBe("Description here");
-    expect(body.activityType).toBe(4);
+    expect(body.description).toBe("New ticket");
   });
 
   it("ticket update sends PUT with fields", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: 42 }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({ seqNo: 42 }),
+    );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -272,22 +279,19 @@ describe("ticket commands", () => {
     ]);
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/rest/itxems/activities/42");
+    expect(url).toContain("/rest/itxems/cases");
     expect(opts.method).toBe("PUT");
 
     const body = JSON.parse(opts.body as string);
-    expect(body.subject).toBe("Updated subject");
+    expect(body.seqNo).toBe(42);
+    expect(body.description).toBe("Updated subject");
     expect(body.status).toBe("resolved");
   });
 
   it("ticket alias 't' works", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => ({ activities: [], totalActivityCount: 0 }),
-      }),
+      vi.fn().mockResolvedValue(jsonResponse([])),
     );
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -299,11 +303,9 @@ describe("ticket commands", () => {
   });
 
   it("ticket update sends category and assignee", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: 42 }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({ seqNo: 42 }),
+    );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -323,10 +325,11 @@ describe("ticket commands", () => {
     ]);
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/rest/itxems/activities/42");
+    expect(url).toContain("/rest/itxems/cases");
     expect(opts.method).toBe("PUT");
 
     const body = JSON.parse(opts.body as string);
+    expect(body.seqNo).toBe(42);
     expect(body.category).toBe("billing");
     expect(body.members).toEqual([
       { role: ROLES.ASSIGNED_USER, name: "alice@company.com" },
@@ -336,11 +339,9 @@ describe("ticket commands", () => {
   it("ticket update resolves assignee alias", async () => {
     setAlias("dave", "dave@company.com");
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: 42 }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({ seqNo: 42 }),
+    );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -363,26 +364,68 @@ describe("ticket commands", () => {
     ]);
   });
 
-  it("ticket activities fetches comments for a ticket", async () => {
-    const commentsData = {
-      comments: [
-        {
-          createdTs: "2025-06-01T10:00:00Z",
-          createdBy: "alice@company.com",
-          text: "Looking into this now",
-        },
-        {
-          createdTs: "2025-06-01T11:00:00Z",
-          createdBy: "bob@company.com",
-          text: "Fixed in latest release",
-        },
-      ],
-    };
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => commentsData,
-    });
+  it("ticket activities fetches comments and linked activities", async () => {
+    // The activities command makes multiple API calls:
+    // 1. GET /rest/itxems/cases?seqNo=42&getComments=true
+    // 2. POST /rest/itxems/cases/search (get links)
+    // 3. POST /rest/itxems/activities/search (get linked activities)
+    // 4. GET /rest/itxems/emailcontent (for each email)
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        // 1. GET case by seqNo
+        jsonResponse([
+          {
+            eactId: 1000,
+            seqNo: 42,
+            texts: [
+              {
+                creationTs: "2025-06-01T10:00:00Z",
+                creator: { firstName: "Alice", lastName: "Smith" },
+                text: "Looking into this now",
+              },
+            ],
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        // 2. POST cases/search - case with links
+        jsonResponse([
+          {
+            eactId: 1000,
+            links: [
+              {
+                type: 14,
+                from: { eactId: 2000 },
+                to: { eactId: 1000 },
+              },
+            ],
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        // 3. POST activities/search - linked activities
+        jsonResponse([
+          {
+            eactId: 2000,
+            activityType: { eatyId: 4 },
+            direction: 1,
+            creationTs: "2025-06-01T09:00:00Z",
+            srcNumber: "+44123",
+            dstNumber: "+44456",
+            startTs: "2025-06-01T09:00:00Z",
+            endTs: "2025-06-01T09:05:00Z",
+            members: [
+              { role: 0, anon: false, user: { firstName: "Bob", lastName: "Jones" } },
+              {
+                role: 20,
+                anon: true,
+                entityExtension: { entity: { name1: "Charlie", name2: "Brown" } },
+              },
+            ],
+          },
+        ]),
+      );
+
     vi.stubGlobal("fetch", mockFetch);
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -391,25 +434,36 @@ describe("ticket commands", () => {
 
     await program.parseAsync(["node", "itx", "ticket", "activities", "42"]);
 
-    const calledUrl = mockFetch.mock.calls[0][0] as string;
-    expect(calledUrl).toContain("/rest/itxems/activities/42/comments");
+    // Verify API calls
+    const call1Url = mockFetch.mock.calls[0][0] as string;
+    expect(call1Url).toContain("/rest/itxems/cases");
+    expect(call1Url).toContain("seqNo=42");
+    expect(call1Url).toContain("getComments=true");
+
+    const call2Url = mockFetch.mock.calls[1][0] as string;
+    expect(call2Url).toContain("/rest/itxems/cases/search");
+
+    const call3Url = mockFetch.mock.calls[2][0] as string;
+    expect(call3Url).toContain("/rest/itxems/activities/search");
 
     const output = spy.mock.calls.map((c) => c[0] ?? c.join(" ")).join("\n");
-    expect(output).toContain("alice@company.com");
+    expect(output).toContain("Alice Smith");
     expect(output).toContain("Looking into this now");
-    expect(output).toContain("bob@company.com");
+    expect(output).toContain("[Call ->]");
+    expect(output).toContain("Charlie Brown");
+    expect(output).toContain("5m 0s");
   });
 
   it("ticket activities --json outputs raw JSON", async () => {
-    const commentsData = { comments: [{ text: "hi" }] };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        headers: new Headers({ "content-type": "application/json" }),
-        json: async () => commentsData,
-      }),
-    );
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        jsonResponse([{ eactId: 1000, seqNo: 42, texts: [{ text: "hi" }] }]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([{ eactId: 1000, links: [] }]),
+      );
+
+    vi.stubGlobal("fetch", mockFetch);
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     const program = createProgram();
@@ -417,15 +471,16 @@ describe("ticket commands", () => {
 
     await program.parseAsync(["node", "itx", "ticket", "activities", "42", "--json"]);
 
-    expect(spy).toHaveBeenCalledWith(JSON.stringify(commentsData, null, 2));
+    const output = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(output).toHaveProperty("activities");
+    expect(output).toHaveProperty("comments");
+    expect(output.comments).toEqual([{ text: "hi" }]);
   });
 
   it("ticket comment sends POST with message", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ id: 100 }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({ id: 100 }),
+    );
     vi.stubGlobal("fetch", mockFetch);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -443,10 +498,11 @@ describe("ticket commands", () => {
     ]);
 
     const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/rest/itxems/activities/42/comments");
+    expect(url).toContain("/rest/itxems/cases/comments");
     expect(opts.method).toBe("POST");
 
     const body = JSON.parse(opts.body as string);
+    expect(body.seqNo).toBe(42);
     expect(body.text).toBe("This is my comment");
   });
 });
