@@ -6,9 +6,6 @@ import {
   clearConfig,
   isConfigured,
   getConfigPath,
-  getAliases,
-  setAlias,
-  removeAlias,
 } from "../lib/config.js";
 import { ItxClient } from "../lib/client.js";
 import { printError, printSuccess, printInfo, printJson } from "../lib/output.js";
@@ -60,29 +57,62 @@ export function registerConfigCommands(program: Command): void {
       printSuccess("Logged in.");
     });
 
-  const config = program.command("config").description("Manage ITX CLI configuration");
-
-  config
-    .command("set")
-    .description("Configure API credentials")
-    .requiredOption("--sso-endpoint <url>", "SSO cluster endpoint (e.g. https://sso.itxuc.com)")
-    .requiredOption("--tokenv2 <token>", "Authentication token (tokenv2)")
-    .option("--rcntrl <token>", "rcntrl header value", "")
-    .option("--ccntrl <token>", "ccntrl header value", "")
-    .action((opts: { ssoEndpoint: string; tokenv2: string; rcntrl: string; ccntrl: string }) => {
-      setConfig({
-        ssoEndpoint: opts.ssoEndpoint,
-        tokenv2: opts.tokenv2,
-        rcntrl: opts.rcntrl,
-        ccntrl: opts.ccntrl,
-      });
-      printSuccess("Configuration saved.");
-      printInfo(`Config file: ${getConfigPath()}`);
+  // Top-level logout command (replaces config clear)
+  program
+    .command("logout")
+    .description("Log out and clear stored credentials")
+    .action(() => {
+      clearConfig();
+      printSuccess("Logged out.");
     });
+
+  // Top-level status command (replaces config test)
+  program
+    .command("status")
+    .description("Show login status and test API connectivity")
+    .option("--json", "Output raw JSON")
+    .action(async (opts: { json: boolean }) => {
+      if (!isConfigured()) {
+        printError('Not configured. Run "itx login" first.');
+        process.exit(1);
+      }
+
+      const c = getConfig();
+      const aliases = c.aliases ? Object.keys(c.aliases) : [];
+
+      try {
+        const client = new ItxClient();
+        const endpoint = await client.resolveEndpoint();
+        const user = await client.getActiveUser() as Record<string, unknown>;
+
+        if (opts.json) {
+          printJson({ user, endpoint, ssoEndpoint: c.ssoEndpoint, configPath: getConfigPath(), aliases: c.aliases });
+          return;
+        }
+
+        const name = [user.firstName, user.lastName].filter(Boolean).join(" ") || "(unknown)";
+        const email = (user.email as string) || "";
+        const userId = user.userId ?? "";
+
+        printSuccess("Connected");
+        console.log();
+        console.log(`  User:      ${name}${email ? ` <${email}>` : ""}`);
+        console.log(`  User ID:   ${userId}`);
+        console.log(`  Endpoint:  ${endpoint}`);
+        console.log(`  SSO:       ${c.ssoEndpoint}`);
+        console.log(`  Aliases:   ${aliases.length > 0 ? aliases.join(", ") : "(none)"}`);
+        console.log(`  Config:    ${getConfigPath()}`);
+      } catch (err) {
+        printError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    });
+
+  const config = program.command("config").description("View raw CLI configuration");
 
   config
     .command("show")
-    .description("Show current configuration")
+    .description("Show stored configuration values")
     .option("--reveal", "Show full token values")
     .action((opts: { reveal: boolean }) => {
       const c = getConfig();
@@ -97,79 +127,5 @@ export function registerConfigCommands(program: Command): void {
       console.log(`rcntrl:          ${mask(c.rcntrl)}`);
       console.log(`ccntrl:          ${mask(c.ccntrl)}`);
       console.log(`\nConfig file: ${getConfigPath()}`);
-    });
-
-  config
-    .command("clear")
-    .description("Remove all stored configuration")
-    .action(() => {
-      clearConfig();
-      printSuccess("Configuration cleared.");
-    });
-
-  config
-    .command("test")
-    .description("Test connectivity by resolving the active endpoint and fetching the active user")
-    .action(async () => {
-      if (!isConfigured()) {
-        printError('Not configured. Run "itx login" first.');
-        process.exit(1);
-      }
-
-      try {
-        const client = new ItxClient();
-
-        printInfo("Resolving active endpoint...");
-        const endpoint = await client.resolveEndpoint();
-        printSuccess(`Active endpoint: ${endpoint}`);
-
-        printInfo("Fetching active user...");
-        const user = await client.getActiveUser();
-        printSuccess("Connection successful. Active user:");
-        printJson(user);
-      } catch (err) {
-        printError(err instanceof Error ? err.message : String(err));
-        process.exit(1);
-      }
-    });
-
-  const alias = config
-    .command("alias")
-    .description("Manage user aliases (e.g. dave → dave@company.com)");
-
-  alias
-    .command("set <name> <value>")
-    .description("Create or update an alias")
-    .action((name: string, value: string) => {
-      setAlias(name, value);
-      printSuccess(`Alias set: ${name} → ${value}`);
-    });
-
-  alias
-    .command("list")
-    .alias("ls")
-    .description("List all aliases")
-    .action(() => {
-      const aliases = getAliases();
-      const entries = Object.entries(aliases);
-      if (entries.length === 0) {
-        printInfo("No aliases configured.");
-        return;
-      }
-      for (const [name, value] of entries) {
-        console.log(`  ${name} → ${value}`);
-      }
-    });
-
-  alias
-    .command("remove <name>")
-    .alias("rm")
-    .description("Remove an alias")
-    .action((name: string) => {
-      if (removeAlias(name)) {
-        printSuccess(`Alias removed: ${name}`);
-      } else {
-        printError(`Alias not found: ${name}`);
-      }
     });
 }

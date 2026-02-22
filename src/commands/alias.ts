@@ -6,11 +6,11 @@ export function registerAliasCommands(program: Command): void {
   const alias = program
     .command("alias")
     .alias("a")
-    .description("Manage user aliases (e.g. dave → dave@company.com)");
+    .description("Manage user aliases for @mentions");
 
   alias
     .command("set <name> <value>")
-    .description("Create or update an alias")
+    .description("Create or update an alias (itx alias set dave dave@company.com)")
     .action((name: string, value: string) => {
       setAlias(name, value);
       printSuccess(`Alias set: ${name} → ${value}`);
@@ -19,7 +19,7 @@ export function registerAliasCommands(program: Command): void {
   alias
     .command("list")
     .alias("ls")
-    .description("List all aliases")
+    .description("List all aliases (itx alias list)")
     .action(() => {
       const aliases = getAliases();
       const entries = Object.entries(aliases);
@@ -35,7 +35,7 @@ export function registerAliasCommands(program: Command): void {
   alias
     .command("remove <name>")
     .alias("rm")
-    .description("Remove an alias")
+    .description("Remove an alias (itx alias remove dave)")
     .action((name: string) => {
       if (removeAlias(name)) {
         printSuccess(`Alias removed: ${name}`);

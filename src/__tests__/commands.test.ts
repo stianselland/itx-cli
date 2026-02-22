@@ -36,42 +36,6 @@ function jsonResponse(data: unknown) {
 }
 
 describe("config commands", () => {
-  it("config set stores credentials", async () => {
-    const program = createProgram();
-    registerConfigCommands(program);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-
-    await program.parseAsync([
-      "node",
-      "itx",
-      "config",
-      "set",
-      "--sso-endpoint",
-      "https://sso.test.com",
-      "--tokenv2",
-      "tok123",
-      "--rcntrl",
-      "rc1",
-      "--ccntrl",
-      "cc1",
-    ]);
-
-    const c = getConfig();
-    expect(c.ssoEndpoint).toBe("https://sso.test.com");
-    expect(c.tokenv2).toBe("tok123");
-    expect(c.rcntrl).toBe("rc1");
-    expect(c.ccntrl).toBe("cc1");
-  });
-
-  it("config set requires --sso-endpoint and --tokenv2", async () => {
-    const program = createProgram();
-    registerConfigCommands(program);
-
-    await expect(
-      program.parseAsync(["node", "itx", "config", "set"]),
-    ).rejects.toThrow();
-  });
-
   it("config show prints current config", async () => {
     setConfig({
       ssoEndpoint: "https://sso.test.com",
@@ -107,14 +71,14 @@ describe("config commands", () => {
     expect(output).toContain("abcdefghijklmnop");
   });
 
-  it("config clear removes all config", async () => {
+  it("logout removes all config", async () => {
     setConfig({ ssoEndpoint: "https://sso.test.com", tokenv2: "tok" });
 
     const program = createProgram();
     registerConfigCommands(program);
     vi.spyOn(console, "log").mockImplementation(() => {});
 
-    await program.parseAsync(["node", "itx", "config", "clear"]);
+    await program.parseAsync(["node", "itx", "logout"]);
 
     const c = getConfig();
     expect(c.ssoEndpoint).toBe("");
@@ -229,7 +193,7 @@ describe("ticket commands", () => {
     expect(spy).toHaveBeenCalledWith(JSON.stringify(responseData, null, 2));
   });
 
-  it("ticket get fetches a single ticket", async () => {
+  it("ticket view fetches a single ticket", async () => {
     const ticketData = [
       {
         seqNo: 42,
@@ -259,7 +223,7 @@ describe("ticket commands", () => {
     const program = createProgram();
     registerTicketCommands(program);
 
-    await program.parseAsync(["node", "itx", "ticket", "get", "42"]);
+    await program.parseAsync(["node", "itx", "ticket", "view", "42"]);
 
     const calledUrl = mockFetch.mock.calls[0][0] as string;
     expect(calledUrl).toContain("/rest/itxems/cases");
@@ -274,7 +238,33 @@ describe("ticket commands", () => {
     expect(output).toContain("(external)");
   });
 
-  it("ticket create sends POST with subject", async () => {
+  it("ticket create with positional subject sends POST", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      jsonResponse({ seqNo: 99 }),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "create",
+      "New ticket",
+    ]);
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toContain("/rest/itxems/cases");
+    expect(opts.method).toBe("POST");
+
+    const body = JSON.parse(opts.body as string);
+    expect(body.description).toBe("New ticket");
+  });
+
+  it("ticket create with -s flag sends POST (backward compat)", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({ seqNo: 99 }),
     );
@@ -410,11 +400,6 @@ describe("ticket commands", () => {
   });
 
   it("ticket activities fetches comments and linked activities", async () => {
-    // The activities command makes multiple API calls:
-    // 1. GET /rest/itxems/cases?seqNo=42&getComments=true
-    // 2. POST /rest/itxems/cases/search (get links)
-    // 3. POST /rest/itxems/activities/search (get linked activities)
-    // 4. GET /rest/itxems/emailcontent (for each email)
     const mockFetch = vi.fn()
       .mockResolvedValueOnce(
         // 1. GET case by seqNo
@@ -522,7 +507,7 @@ describe("ticket commands", () => {
     expect(output.comments).toEqual([{ text: "hi" }]);
   });
 
-  it("ticket comment without mention uses activitytexts endpoint", async () => {
+  it("ticket comment with positional message uses activitytexts endpoint", async () => {
     const mockFetch = vi.fn()
       .mockResolvedValueOnce(
         // GET case by seqNo
@@ -544,7 +529,6 @@ describe("ticket commands", () => {
       "ticket",
       "comment",
       "42",
-      "-m",
       "This is my comment",
     ]);
 
@@ -562,6 +546,38 @@ describe("ticket commands", () => {
     expect(body.text).toBe("<p>This is my comment</p>");
     expect(body.activity).toEqual({ eactId: 1000 });
     expect(body.data).toBeUndefined();
+  });
+
+  it("ticket comment with -m flag uses activitytexts endpoint (backward compat)", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce(
+        jsonResponse([{ eactId: 1000, seqNo: 42 }]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ eateId: 999 }),
+      );
+    vi.stubGlobal("fetch", mockFetch);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const program = createProgram();
+    registerTicketCommands(program);
+
+    await program.parseAsync([
+      "node",
+      "itx",
+      "ticket",
+      "comment",
+      "42",
+      "-m",
+      "This is my comment",
+    ]);
+
+    const [url2, opts2] = mockFetch.mock.calls[1];
+    expect(url2).toContain("/rest/itxems/activitytexts");
+
+    const body = JSON.parse(opts2.body as string);
+    expect(body.text).toBe("<p>This is my comment</p>");
+    expect(body.activity).toEqual({ eactId: 1000 });
   });
 
   it("ticket comment --mention with alias resolves user and sends tags", async () => {
@@ -595,7 +611,6 @@ describe("ticket commands", () => {
       "ticket",
       "comment",
       "42",
-      "-m",
       "Please look at this",
       "--mention",
       "dave",
@@ -644,7 +659,6 @@ describe("ticket commands", () => {
       "ticket",
       "comment",
       "10",
-      "-m",
       "Check this",
       "--mention",
       "alice@company.com",
@@ -751,61 +765,6 @@ describe("top-level alias commands", () => {
     await program.parseAsync([
       "node",
       "itx",
-      "alias",
-      "remove",
-      "dave",
-    ]);
-
-    expect(getAliases()).toEqual({});
-  });
-});
-
-describe("alias commands", () => {
-  it("config alias set creates an alias", async () => {
-    const program = createProgram();
-    registerConfigCommands(program);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-
-    await program.parseAsync([
-      "node",
-      "itx",
-      "config",
-      "alias",
-      "set",
-      "dave",
-      "dave@company.com",
-    ]);
-
-    expect(getAliases()).toEqual({ dave: "dave@company.com" });
-  });
-
-  it("config alias list shows aliases", async () => {
-    setAlias("dave", "dave@company.com");
-    setAlias("alice", "alice@company.com");
-
-    const program = createProgram();
-    registerConfigCommands(program);
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    await program.parseAsync(["node", "itx", "config", "alias", "list"]);
-
-    const output = spy.mock.calls.map((c) => c[0]).join("\n");
-    expect(output).toContain("dave");
-    expect(output).toContain("dave@company.com");
-    expect(output).toContain("alice");
-  });
-
-  it("config alias remove deletes an alias", async () => {
-    setAlias("dave", "dave@company.com");
-
-    const program = createProgram();
-    registerConfigCommands(program);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-
-    await program.parseAsync([
-      "node",
-      "itx",
-      "config",
       "alias",
       "remove",
       "dave",

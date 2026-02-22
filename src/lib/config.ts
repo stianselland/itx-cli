@@ -11,6 +11,9 @@ export interface ItxConfig {
 
 const config = new Conf<ItxConfig>({
   projectName: "itx-cli",
+  // When ITX_CONFIG_DIR is set (e.g. in tests), use an isolated directory
+  // so tests never touch real user credentials.
+  ...(process.env.ITX_CONFIG_DIR ? { cwd: process.env.ITX_CONFIG_DIR } : {}),
   schema: {
     ssoEndpoint: {
       type: "string",

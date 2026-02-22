@@ -20,7 +20,7 @@ export function registerUserCommands(program: Command): void {
   user
     .command("list")
     .alias("ls")
-    .description("List all users")
+    .description("List all users (itx user list)")
     .option("--json", "Output raw JSON")
     .action(async (opts: { json: boolean }) => {
       const client = requireAuth();

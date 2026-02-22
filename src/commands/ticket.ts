@@ -137,7 +137,7 @@ export function registerTicketCommands(program: Command): void {
   ticket
     .command("list")
     .alias("ls")
-    .description("List tickets")
+    .description("List tickets (itx ticket list --limit 10)")
     .option("-l, --limit <n>", "Maximum number of tickets to return", "25")
     .option("-o, --offset <n>", "Offset for pagination", "0")
     .option("--json", "Output raw JSON")
@@ -191,8 +191,8 @@ export function registerTicketCommands(program: Command): void {
     });
 
   ticket
-    .command("get <id>")
-    .description("Get details of a specific ticket by case number")
+    .command("view <id>")
+    .description("View ticket details (itx ticket view 43146)")
     .option("--json", "Output raw JSON")
     .action(async (id: string, opts: { json: boolean }) => {
       const client = requireAuth();
@@ -263,22 +263,27 @@ export function registerTicketCommands(program: Command): void {
     });
 
   ticket
-    .command("create")
-    .description("Create a new ticket")
-    .requiredOption("-s, --subject <text>", "Ticket subject")
+    .command("create [subject]")
+    .description("Create a new ticket (itx ticket create 'Bug in login')")
+    .option("-s, --subject <text>", "Ticket subject (alternative to positional)")
     .option("--json", "Output raw JSON")
     .action(
-      async (opts: {
-        subject: string;
+      async (subjectArg: string | undefined, opts: {
+        subject?: string;
         json: boolean;
       }) => {
+        const subject = subjectArg || opts.subject;
+        if (!subject) {
+          printError("Subject is required. Provide as argument or with -s/--subject.");
+          process.exit(1);
+        }
         const client = requireAuth();
         try {
           const data = await client.request<Record<string, unknown>>(
             "/rest/itxems/cases",
             {
               method: "POST",
-              body: { description: opts.subject },
+              body: { description: subject },
             },
           );
 
@@ -297,7 +302,7 @@ export function registerTicketCommands(program: Command): void {
 
   ticket
     .command("update <id>")
-    .description("Update an existing ticket")
+    .description("Update a ticket (itx ticket update 43146 --status resolved)")
     .option("-s, --subject <text>", "New subject")
     .option("--status <status>", "New status")
     .option("--category <category>", "New category")
@@ -357,7 +362,7 @@ export function registerTicketCommands(program: Command): void {
   ticket
     .command("activities <id>")
     .alias("act")
-    .description("List activities and comments on a ticket")
+    .description("List activities on a ticket (itx ticket activities 43146)")
     .option("--json", "Output raw JSON")
     .action(async (id: string, opts: { json: boolean }) => {
       const client = requireAuth();
@@ -616,16 +621,22 @@ export function registerTicketCommands(program: Command): void {
     });
 
   ticket
-    .command("comment <id>")
-    .description("Add a comment to a ticket")
-    .requiredOption("-m, --message <text>", "Comment text")
+    .command("comment <id> [message]")
+    .description("Add a comment to a ticket (itx ticket comment 43146 'Looking into it')")
+    .option("-m, --message <text>", "Comment text (alternative to positional)")
     .option("--mention <user...>", "Mention users by alias or email (repeatable)")
     .option("--json", "Output raw JSON")
     .action(
       async (
         id: string,
-        opts: { message: string; mention?: string[]; json: boolean },
+        messageArg: string | undefined,
+        opts: { message?: string; mention?: string[]; json: boolean },
       ) => {
+        const message = messageArg || opts.message;
+        if (!message) {
+          printError("Message is required. Provide as argument or with -m/--message.");
+          process.exit(1);
+        }
         const client = requireAuth();
         try {
           // Fetch case by seqNo to get eactId
@@ -672,7 +683,7 @@ export function registerTicketCommands(program: Command): void {
             }
           }
 
-          const text = `<p>${mentionPrefix}${opts.message}</p>`;
+          const text = `<p>${mentionPrefix}${message}</p>`;
           const data = tags.length > 0 ? { tags } : undefined;
 
           const response = await client.addActivityText(eactId, text, data);
