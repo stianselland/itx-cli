@@ -6,10 +6,14 @@ export interface ItxConfig {
   rcntrl: string;
   ccntrl: string;
   activeEndpoint?: string;
+  aliases: Record<string, string>;
 }
 
 const config = new Conf<ItxConfig>({
   projectName: "itx-cli",
+  // When ITX_CONFIG_DIR is set (e.g. in tests), use an isolated directory
+  // so tests never touch real user credentials.
+  ...(process.env.ITX_CONFIG_DIR ? { cwd: process.env.ITX_CONFIG_DIR } : {}),
   schema: {
     ssoEndpoint: {
       type: "string",
@@ -31,6 +35,10 @@ const config = new Conf<ItxConfig>({
       type: "string",
       default: "",
     },
+    aliases: {
+      type: "object",
+      default: {},
+    },
   },
 });
 
@@ -41,6 +49,7 @@ export function getConfig(): ItxConfig {
     rcntrl: config.get("rcntrl"),
     ccntrl: config.get("ccntrl"),
     activeEndpoint: config.get("activeEndpoint"),
+    aliases: config.get("aliases"),
   };
 }
 
@@ -63,4 +72,27 @@ export function isConfigured(): boolean {
 
 export function getConfigPath(): string {
   return config.path;
+}
+
+export function getAliases(): Record<string, string> {
+  return config.get("aliases");
+}
+
+export function setAlias(name: string, value: string): void {
+  const aliases = config.get("aliases");
+  aliases[name] = value;
+  config.set("aliases", aliases);
+}
+
+export function removeAlias(name: string): boolean {
+  const aliases = config.get("aliases");
+  if (!(name in aliases)) return false;
+  delete aliases[name];
+  config.set("aliases", aliases);
+  return true;
+}
+
+export function resolveAlias(nameOrValue: string): string {
+  const aliases = config.get("aliases");
+  return aliases[nameOrValue] ?? nameOrValue;
 }
