@@ -160,6 +160,69 @@ Find any tickets assigned to dave that haven't been updated in the last week.
 
 Claude Code will use `itx` commands with `--json` to fetch the data, reason about it, and take action — turning ITX into something you can talk to instead of click through.
 
+## Customers and Prospects
+
+Beyond per-ticket workflows, `itx-cli` lets you pivot to a customer or prospect
+to read everything in one place:
+
+```bash
+# Find a customer by name (substring or --exact)
+itx customer search "Wright Electrical"
+itx customer search "Wright Electrical Ltd" --exact
+
+# View profile (default positional is the UI-visible customer number)
+itx customer view 10058
+itx customer view --hubspot-id 56610569434
+itx customer view --emen-id 6846831
+
+# Aggregated summary — profile, ticket stats, recent communication,
+# sales pipeline, and a health signal (ok | attention | trouble)
+itx customer summary 10058
+itx customer summary 10058 --depth full --json
+
+# All tickets for a customer
+itx customer tickets 10058 --status open
+itx customer tickets 10058 --since 2026-01-01 --json
+
+# Communication trail — emails, calls, notes, sales
+itx customer activities 10058 --type email --include-bodies
+itx customer activities 10058 --type sale --json
+
+# Linked contacts (corporate customers only)
+itx customer view 10058 --include-contacts
+itx customer summary 10058 --include-contacts
+```
+
+`itx prospect …` mirrors all of the above for prospect entities.
+
+These commands are **read-only**. The only writes in the CLI remain
+`ticket create`, `ticket update`, and `ticket comment`.
+
+## JSON output for agents
+
+Every `--json` output uses a stable envelope:
+
+```json
+{
+  "ok": true,
+  "data": { ... },
+  "pagination": { "limit": 50, "offset": 0, "total": 12, "hasMore": false }
+}
+```
+
+To discover the shape of a command's `data`, use:
+
+```bash
+itx schema customer summary     # contract for one command
+itx help schemas                # all contracts at once
+```
+
+Exit codes are distinct per failure mode:
+`0` ok, `1` usage error, `2` API error, `3` not found, `4` ambiguous,
+`5` not authenticated.
+
+See [AGENTS.md](AGENTS.md) for the full agent guide.
+
 ## Command Reference
 
 ```
@@ -174,6 +237,14 @@ itx ticket update <id> [options]   Update a ticket
 itx ticket comment <id> <message>  Add a comment to a ticket
 itx ticket activities <id>         List all activities on a ticket (aliases: t act)
 
+itx customer search [query]        Search customers by name
+itx customer view [seqNo]          View a customer profile
+itx customer tickets [seqNo]       List all tickets for a customer
+itx customer activities [seqNo]    Communication trail for a customer
+itx customer summary [seqNo]       Aggregated health/ticket/pipeline summary
+
+itx prospect …                     Same verbs, prospects only
+
 itx user list                      List all users (aliases: u ls)
 
 itx alias set <name> <value>       Create or update an alias
@@ -182,6 +253,9 @@ itx alias remove <name>            Remove an alias (aliases: a rm)
 
 itx config show                    Show stored configuration values
 itx config show --reveal           Show full token values (unmasked)
+
+itx schema [command]               JSON-output contract for the named command
+itx help schemas                   All schemas at once (paste into CLAUDE.md)
 ```
 
 ## Disclaimer

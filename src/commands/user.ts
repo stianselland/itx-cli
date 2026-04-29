@@ -1,15 +1,11 @@
 import { Command } from "commander";
-import { isConfigured } from "../lib/config.js";
-import { ItxClient } from "../lib/client.js";
-import { printTable, printJson, printError, printInfo } from "../lib/output.js";
-
-function requireAuth(): ItxClient {
-  if (!isConfigured()) {
-    printError('Not configured. Run "itx login" first.');
-    process.exit(1);
-  }
-  return new ItxClient();
-}
+import { requireAuth } from "../lib/auth.js";
+import {
+  printTable,
+  printJsonOk,
+  printInfo,
+  handleError,
+} from "../lib/output.js";
 
 export function registerUserCommands(program: Command): void {
   const user = program
@@ -23,12 +19,20 @@ export function registerUserCommands(program: Command): void {
     .description("List all users (itx user list)")
     .option("--json", "Output raw JSON")
     .action(async (opts: { json: boolean }) => {
-      const client = requireAuth();
+      const client = requireAuth(opts);
       try {
         const users = await client.searchUsers();
 
         if (opts.json) {
-          printJson(users);
+          // /users/search returns the full set; total === page size.
+          printJsonOk(users, {
+            pagination: {
+              limit: users.length,
+              offset: 0,
+              total: users.length,
+              hasMore: false,
+            },
+          });
           return;
         }
 
@@ -49,8 +53,7 @@ export function registerUserCommands(program: Command): void {
           ],
         );
       } catch (err) {
-        printError(err instanceof Error ? err.message : String(err));
-        process.exit(1);
+        handleError(err, { json: opts.json });
       }
     });
 }

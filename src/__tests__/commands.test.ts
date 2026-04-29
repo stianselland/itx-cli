@@ -175,7 +175,7 @@ describe("ticket commands", () => {
     expect(calledUrl).toContain("limitTo=10");
   });
 
-  it("ticket list --json outputs raw JSON", async () => {
+  it("ticket list --json wraps in envelope with pagination", async () => {
     const responseData = [
       { seqNo: 1, description: "Test" },
     ];
@@ -190,7 +190,11 @@ describe("ticket commands", () => {
 
     await program.parseAsync(["node", "itx", "ticket", "list", "--json"]);
 
-    expect(spy).toHaveBeenCalledWith(JSON.stringify(responseData, null, 2));
+    const env = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(env.ok).toBe(true);
+    expect(env.data).toEqual(responseData);
+    expect(env.pagination).toBeDefined();
+    expect(env.pagination.offset).toBe(0);
   });
 
   it("ticket view fetches a single ticket", async () => {
@@ -501,10 +505,13 @@ describe("ticket commands", () => {
 
     await program.parseAsync(["node", "itx", "ticket", "activities", "42", "--json"]);
 
-    const output = JSON.parse(spy.mock.calls[0][0] as string);
-    expect(output).toHaveProperty("activities");
-    expect(output).toHaveProperty("comments");
-    expect(output.comments).toEqual([{ text: "hi" }]);
+    const env = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(env.ok).toBe(true);
+    expect(env.data).toHaveProperty("ticket");
+    expect(env.data.ticket.seqNo).toBe(42);
+    expect(env.data).toHaveProperty("activities");
+    expect(env.data).toHaveProperty("comments");
+    expect(env.data.comments[0].text).toBe("hi");
   });
 
   it("ticket comment with positional message uses activitytexts endpoint", async () => {
@@ -702,7 +709,7 @@ describe("user commands", () => {
     expect(output).toContain("Bob Jones");
   });
 
-  it("user list --json outputs raw JSON", async () => {
+  it("user list --json wraps in envelope", async () => {
     const users = [
       { userId: 1, firstName: "Alice", lastName: "Smith", email: "alice@co.com", active: 1 },
     ];
@@ -715,9 +722,11 @@ describe("user commands", () => {
 
     await program.parseAsync(["node", "itx", "user", "list", "--json"]);
 
-    const output = JSON.parse(spy.mock.calls[0][0] as string);
-    expect(output).toHaveLength(1);
-    expect(output[0].firstName).toBe("Alice");
+    const env = JSON.parse(spy.mock.calls[0][0] as string);
+    expect(env.ok).toBe(true);
+    expect(env.data).toHaveLength(1);
+    expect(env.data[0].firstName).toBe("Alice");
+    expect(env.pagination).toBeDefined();
   });
 });
 
