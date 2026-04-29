@@ -1,6 +1,6 @@
 {
   "name": "@stianselland/itx-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "CLI tool for the ITX Portal API",
   "type": "module",
   "main": "dist/index.js",
