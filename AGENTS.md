@@ -115,6 +115,35 @@ itx customer search "Wright" --json
 itx customer search "Wright Electrical Ltd" --exact --json
 ```
 
+**"Filter the global ticket queue"**
+
+`itx ticket list` filters cases server-side. Status, priority, and category are
+matched by name (case-insensitive, substring fallback); an unknown name returns
+`NOT_FOUND` with the list of valid names. Multi-value flags are repeatable.
+
+```bash
+itx ticket list --status Open --category "1st line support" --json
+itx ticket list --mine --status Open --json          # assigned to me, open
+itx ticket list --unassigned --json                  # no assignee
+itx ticket list --following --json                   # cases I follow
+itx ticket list --assignee piers@example.com --json
+itx ticket list --customer 16930 --json              # all cases for a customer/prospect (UI number)
+itx ticket list --customer-emen-id 5051961 --json    # ...by internal entity id
+itx ticket list --seq 50729 50728 --json             # specific tickets
+itx ticket list --search "invoice" --created-from 2026-06-01 --json
+```
+
+Flags: `--status`/`--exclude-status`, `--priority`, `--category`/`--exclude-category`,
+`--assignee`, `--mine`, `--unassigned`, `--following`, `--customer`/`--customer-emen-id`,
+`--seq`, `--search`, `--created-from`/`--created-to`, `--updated-from`/`--updated-to`,
+plus `--limit`/`--offset` for paging. Multi-value flags (`--status`, `--seq`, …) are
+repeatable. Status/priority/category match by name (case-insensitive, substring
+fallback); an unknown name returns `NOT_FOUND` with the list of valid names.
+
+`--json` returns the same `TicketSummary[]` shape as `customer tickets`
+(`{ seqNo, eactId, subject, status{id,name}, priority{id,name}, category{id,name},
+creationTs, updateTs, assignedUser?{userId,name} }`) — see `itx schema ticket list`.
+
 ## Read-only guarantee for new surface
 
 `customer …` and `prospect …` commands never write. The only writes in the CLI

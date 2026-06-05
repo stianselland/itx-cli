@@ -21,7 +21,8 @@ import {
   projectActivity,
   resolveTicketActivities,
 } from "../lib/activities.js";
-import type { TicketActivitiesResult } from "../lib/schemas.js";
+import type { TicketActivitiesResult, TicketSummary } from "../lib/schemas.js";
+import { buildCaseSearchBody, type TicketSearchOpts } from "../lib/ticketsearch.js";
 
 // Re-export for callers that imported ROLES from this module.
 export { ROLES };
@@ -37,6 +38,37 @@ function translateName(nameObj: Record<string, unknown> | undefined): string {
     (nameObj.defaultText as string) ??
     ""
   );
+}
+
+/**
+ * Project a raw `/cases/search` case into the typed {@link TicketSummary} shape
+ * shared with `customer tickets`. Search results carry inline name objects for
+ * status/priority/category, so no refdata lookup is needed; status id is
+ * `emstId`, priority `empriId`, category `ctnoId`.
+ */
+function projectCaseSummary(c: Record<string, unknown>): TicketSummary {
+  const status = (c.emsStatus as { emstId?: number; name?: Record<string, unknown> }) ?? {};
+  const priority = (c.priority as { empriId?: number; name?: Record<string, unknown> }) ?? {};
+  const category = (c.category as { ctnoId?: number; name?: Record<string, unknown> }) ?? {};
+  const members = c.members as Record<string, unknown>[] | undefined;
+  const assigned = members?.find(
+    (m) => m.role === ROLES.ASSIGNED_USER && !m.anon,
+  );
+  const assignedUserId = (assigned?.user as { userId?: number } | undefined)?.userId;
+
+  return {
+    seqNo: (c.seqNo as number) ?? 0,
+    eactId: (c.eactId as number) ?? 0,
+    subject: (c.description as string) ?? "",
+    status: { id: status.emstId ?? null, name: translateName(status.name) },
+    priority: { id: priority.empriId ?? null, name: translateName(priority.name) },
+    category: { id: category.ctnoId ?? null, name: translateName(category.name) },
+    creationTs: (c.creationTs as string) ?? "",
+    updateTs: (c.updateTs as string) ?? "",
+    ...(assigned && assignedUserId
+      ? { assignedUser: { userId: assignedUserId, name: memberName(assigned) } }
+      : {}),
+  };
 }
 
 /** Build a display name from a member's user or entity. */
@@ -65,18 +97,44 @@ export function registerTicketCommands(program: Command): void {
   ticket
     .command("list")
     .alias("ls")
-    .description("List tickets (itx ticket list --limit 10)")
+    .description("List or filter tickets (itx ticket list --status open --mine)")
     .option("-l, --limit <n>", "Maximum number of tickets to return", "25")
     .option("-o, --offset <n>", "Offset for pagination", "0")
-    .option("--json", "Output raw JSON")
-    .action(async (opts: { limit: string; offset: string; json: boolean }) => {
+    // Status / priority / category (resolved by name via refdata).
+    .option("--status <name...>", "Filter by status name (repeatable)")
+    .option("--exclude-status <name...>", "Exclude status name (repeatable)")
+    .option("--priority <name...>", "Filter by priority name (repeatable)")
+    .option("--category <name...>", "Filter by category name (repeatable)")
+    .option("--exclude-category <name...>", "Exclude category name (repeatable)")
+    // Assignment / ownership.
+    .option("--assignee <user>", "Filter by assigned user (alias, email, or name)")
+    .option("--mine", "Only cases assigned to me")
+    .option("--unassigned", "Only unassigned cases")
+    .option("--following", "Only cases I follow")
+    .option("--customer <seqNo>", "Only cases for this customer/prospect (UI number)")
+    .option("--customer-emen-id <n>", "Only cases for this entity (internal emenId)")
+    // Entity / ticket ids / text / dates.
+    .option("--seq <n...>", "Filter by specific ticket numbers (repeatable)")
+    .option("--search <text>", "Free-text match on description")
+    .option("--created-from <date>", "Created on/after ISO date")
+    .option("--created-to <date>", "Created on/before ISO date")
+    .option("--updated-from <date>", "Updated on/after ISO date")
+    .option("--updated-to <date>", "Updated on/before ISO date")
+    .option("--json", "Output JSON (TicketSummary[]; see `itx schema ticket list`)")
+    .action(
+      async (
+        opts: TicketSearchOpts & { limit: string; offset: string; json: boolean },
+      ) => {
       const client = requireAuth(opts);
       try {
         const limit = Number(opts.limit);
         const offset = Number(opts.offset);
+        const body = await buildCaseSearchBody(client, opts);
         const data = await client.request<Record<string, unknown>[]>(
-          "/rest/itxems/cases",
+          "/rest/itxems/cases/search",
           {
+            method: "POST",
+            body,
             params: {
               getMembers: true,
               limitFrom: offset,
@@ -86,40 +144,42 @@ export function registerTicketCommands(program: Command): void {
         );
 
         const cases = data ?? [];
+        const tickets = cases.map(projectCaseSummary);
 
         if (opts.json) {
-          printJsonOk(cases, {
+          printJsonOk(tickets, {
             pagination: {
               limit,
               offset,
-              total: cases.length,
-              hasMore: cases.length === limit,
+              total: tickets.length,
+              hasMore: tickets.length === limit,
             },
           });
           return;
         }
 
-        printInfo(`Showing ${cases.length} tickets`);
+        printInfo(`Showing ${tickets.length} tickets`);
 
         printTable(
-          cases.map((c) => {
-            const status = c.emsStatus as
-              | { name?: Record<string, unknown> }
-              | undefined;
-            return {
-              id: c.seqNo,
-              subject: c.description ?? "",
-              status: translateName(status?.name),
-              created: c.creationTs
-                ? new Date(c.creationTs as string).toLocaleDateString()
-                : "",
-            };
-          }),
+          tickets.map((t) => ({
+            id: t.seqNo,
+            subject: t.subject,
+            status: t.status.name,
+            priority: t.priority.name,
+            category: t.category.name,
+            assignee: t.assignedUser?.name ?? "",
+            created: t.creationTs
+              ? new Date(t.creationTs).toLocaleDateString()
+              : "",
+          })),
           [
-            { key: "id", label: "ID", width: 10 },
-            { key: "subject", label: "Subject", width: 40 },
-            { key: "status", label: "Status", width: 15 },
-            { key: "created", label: "Created", width: 12 },
+            { key: "id", label: "ID", width: 8 },
+            { key: "subject", label: "Subject", width: 32 },
+            { key: "status", label: "Status", width: 12 },
+            { key: "priority", label: "Priority", width: 10 },
+            { key: "category", label: "Category", width: 16 },
+            { key: "assignee", label: "Assignee", width: 18 },
+            { key: "created", label: "Created", width: 11 },
           ],
         );
       } catch (err) {

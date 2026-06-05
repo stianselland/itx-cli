@@ -349,14 +349,14 @@ function projectTicket(
 ): TicketSummary {
   const status = (raw.emsStatus as { emstId?: number }) ?? {};
   const priority = (raw.priority as { empriId?: number }) ?? {};
-  const category = (raw.category as { emcaId?: number }) ?? {};
+  const category = (raw.category as { ctnoId?: number }) ?? {};
   return {
     seqNo: (raw.seqNo as number) ?? 0,
     eactId: (raw.eactId as number) ?? 0,
     subject: (raw.description as string) ?? "",
     status: { id: status.emstId ?? null, name: statusMap.get(status.emstId ?? 0) ?? "" },
     priority: { id: priority.empriId ?? null, name: priorityMap.get(priority.empriId ?? 0) ?? "" },
-    category: { id: category.emcaId ?? null, name: categoryMap.get(category.emcaId ?? 0) ?? "" },
+    category: { id: category.ctnoId ?? null, name: categoryMap.get(category.ctnoId ?? 0) ?? "" },
     creationTs: (raw.creationTs as string) ?? "",
     updateTs: (raw.updateTs as string) ?? "",
   };
@@ -390,7 +390,7 @@ function addTickets(parent: Command, role: ExtensionRole) {
         const refdata = await loadRefdata(client);
         const statusMap = buildRefLookup(refdata.statuses, (s) => s.emstId);
         const priorityMap = buildRefLookup(refdata.priorities, (p) => p.empriId);
-        const categoryMap = buildRefLookup(refdata.categories, (c) => c.emcaId);
+        const categoryMap = buildRefLookup(refdata.categories, (c) => c.ctnoId);
 
         const ids = [resolved.identity.emenId];
         if (opts.includeContacts) ids.push(...resolved.linkedContactEmenIds);

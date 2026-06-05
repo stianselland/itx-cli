@@ -28,7 +28,7 @@ interface PriorityRef {
 }
 
 interface CategoryRef {
-  emcaId: number;
+  ctnoId: number;
   name: string;
   parent?: number | null;
 }
@@ -78,9 +78,12 @@ export async function loadRefdata(client: ItxClient): Promise<RefData> {
       name: translate(p.name as NameField | undefined),
     }));
     const categories: CategoryRef[] = (categoriesRaw ?? []).map((c) => ({
-      emcaId: c.emcaId as number,
+      // The /categories endpoint keys categories on ctnoId (same id used on
+      // case.category.ctnoId and the cases/search `categories` filter) — there
+      // is no emcaId field, despite older code assuming one.
+      ctnoId: c.ctnoId as number,
       name: translate(c.name as NameField | undefined),
-      parent: ((c.parent as { emcaId?: number } | undefined)?.emcaId) ?? null,
+      parent: ((c.parent as { ctnoId?: number } | undefined)?.ctnoId) ?? null,
     }));
 
     return { statuses, priorities, categories };

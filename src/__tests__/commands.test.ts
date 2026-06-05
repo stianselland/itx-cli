@@ -175,9 +175,21 @@ describe("ticket commands", () => {
     expect(calledUrl).toContain("limitTo=10");
   });
 
-  it("ticket list --json wraps in envelope with pagination", async () => {
+  it("ticket list --json projects cases to the TicketSummary shape", async () => {
     const responseData = [
-      { seqNo: 1, description: "Test" },
+      {
+        seqNo: 1,
+        eactId: 99,
+        description: "Test",
+        emsStatus: { emstId: 295, name: { defaultText: "Open" } },
+        priority: { empriId: 107, name: { defaultText: "Normal" } },
+        category: { ctnoId: 28757, name: { defaultText: "Admin" } },
+        creationTs: "2025-01-01T00:00:00Z",
+        updateTs: "2025-01-02T00:00:00Z",
+        members: [
+          { role: 1, anon: false, user: { userId: 42, firstName: "Liam", lastName: "Mulligan" } },
+        ],
+      },
     ];
     vi.stubGlobal(
       "fetch",
@@ -192,7 +204,19 @@ describe("ticket commands", () => {
 
     const env = JSON.parse(spy.mock.calls[0][0] as string);
     expect(env.ok).toBe(true);
-    expect(env.data).toEqual(responseData);
+    expect(env.data).toEqual([
+      {
+        seqNo: 1,
+        eactId: 99,
+        subject: "Test",
+        status: { id: 295, name: "Open" },
+        priority: { id: 107, name: "Normal" },
+        category: { id: 28757, name: "Admin" },
+        creationTs: "2025-01-01T00:00:00Z",
+        updateTs: "2025-01-02T00:00:00Z",
+        assignedUser: { userId: 42, name: "Liam Mulligan" },
+      },
+    ]);
     expect(env.pagination).toBeDefined();
     expect(env.pagination.offset).toBe(0);
   });

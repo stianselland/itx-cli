@@ -47,6 +47,12 @@ The core workflow. List your queue, drill into a ticket, read the full conversat
 itx ticket list
 itx ticket list --limit 10
 
+# Filter the queue (status/priority/category match by name)
+itx ticket list --mine --status Open
+itx ticket list --status Open --category "1st line support"
+itx ticket list --unassigned
+itx ticket list --customer 16930          # all cases for a customer
+
 # View a specific ticket with members and status
 itx ticket view 43146
 
@@ -125,7 +131,7 @@ This project uses ITX for support ticket management. The `itx` CLI is available
 for reading and managing tickets.
 
 Common commands:
-- `itx ticket list --json` — list open tickets
+- `itx ticket list --json` — list/filter tickets (`--status`, `--mine`, `--customer`, …)
 - `itx ticket view <id> --json` — get ticket details (status, priority, members)
 - `itx ticket activities <id> --json` — full communication history (emails, calls, chats, comments)
 - `itx ticket comment <id> '<message>'` — add a comment to a ticket

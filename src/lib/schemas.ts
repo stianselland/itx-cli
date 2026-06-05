@@ -189,6 +189,18 @@ export interface CustomerSummary {
  * value" introspection helper.
  */
 export const COMMAND_FIELDS: Record<string, string[]> = {
+  // `ticket list` data is a TicketSummary[]; fields below are per-element.
+  "ticket list": [
+    "seqNo",
+    "eactId",
+    "subject",
+    "status",
+    "priority",
+    "category",
+    "creationTs",
+    "updateTs",
+    "assignedUser",
+  ],
   "ticket activities": ["ticket", "activities", "comments"],
   "customer search": ["identity", "matchedOn"],
   "customer view": ["identity", "contact", "linkedContacts"],

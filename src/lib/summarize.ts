@@ -24,7 +24,7 @@ interface SummarizeInput {
   activities: Record<string, unknown>[];
   refStatuses: { emstId: number; internalStatus: number; name: string }[];
   refPriorities: { empriId: number; name: string }[];
-  refCategories: { emcaId: number; name: string }[];
+  refCategories: { ctnoId: number; name: string }[];
   depth: SummaryDepth;
   since?: string;
 }
@@ -51,7 +51,7 @@ export function summarize(input: SummarizeInput): CustomerSummary {
 
   const statusMap = new Map(refStatuses.map((s) => [s.emstId, s]));
   const priorityMap = new Map(refPriorities.map((p) => [p.empriId, p.name]));
-  const categoryMap = new Map(refCategories.map((c) => [c.emcaId, c.name]));
+  const categoryMap = new Map(refCategories.map((c) => [c.ctnoId, c.name]));
 
   // Filter by since (client-side).
   const inWindow = (ts: string) =>
@@ -100,7 +100,7 @@ export function summarize(input: SummarizeInput): CustomerSummary {
       ticketStats.criticalOpen++;
     }
 
-    const cat = ((t.category as { emcaId?: number }) ?? {}).emcaId ?? 0;
+    const cat = ((t.category as { ctnoId?: number }) ?? {}).ctnoId ?? 0;
     const catName = categoryMap.get(cat) ?? "Uncategorised";
     ticketStats.byCategory[catName] = (ticketStats.byCategory[catName] ?? 0) + 1;
   }
@@ -115,7 +115,7 @@ export function summarize(input: SummarizeInput): CustomerSummary {
     for (const t of ranked.slice(0, recentLimit)) {
       const stId = ((t.emsStatus as { emstId?: number }) ?? {}).emstId ?? 0;
       const pr = ((t.priority as { empriId?: number }) ?? {}).empriId ?? 0;
-      const cat = ((t.category as { emcaId?: number }) ?? {}).emcaId ?? 0;
+      const cat = ((t.category as { ctnoId?: number }) ?? {}).ctnoId ?? 0;
       recentTickets.push({
         seqNo: (t.seqNo as number) ?? 0,
         eactId: (t.eactId as number) ?? 0,
