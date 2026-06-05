@@ -8,7 +8,14 @@ import {
   getConfigPath,
 } from "../lib/config.js";
 import { ItxClient } from "../lib/client.js";
-import { printError, printSuccess, printInfo, printJson } from "../lib/output.js";
+import {
+  printError,
+  printSuccess,
+  printJsonOk,
+  printJsonError,
+  handleError,
+  exitWithError,
+} from "../lib/output.js";
 
 const DEFAULT_SSO_ENDPOINT = "https://app.itxuc.com";
 
@@ -45,7 +52,7 @@ export function registerConfigCommands(program: Command): void {
       const parsed = parseApiKey(apiKeyInput);
       if (!parsed) {
         printError("Invalid API key. Expected format: ?tokenv2=...&rcntrl=...&ccntrl=...");
-        process.exit(1);
+        exitWithError("USAGE");
       }
 
       setConfig({
@@ -73,8 +80,12 @@ export function registerConfigCommands(program: Command): void {
     .option("--json", "Output raw JSON")
     .action(async (opts: { json: boolean }) => {
       if (!isConfigured()) {
-        printError('Not configured. Run "itx login" first.');
-        process.exit(1);
+        if (opts.json) {
+          printJsonError("AUTH", 'Not configured. Run "itx login" first.');
+        } else {
+          printError('Not configured. Run "itx login" first.');
+        }
+        exitWithError("AUTH");
       }
 
       const c = getConfig();
@@ -86,7 +97,7 @@ export function registerConfigCommands(program: Command): void {
         const user = await client.getActiveUser() as Record<string, unknown>;
 
         if (opts.json) {
-          printJson({ user, endpoint, ssoEndpoint: c.ssoEndpoint, configPath: getConfigPath(), aliases: c.aliases });
+          printJsonOk({ user, endpoint, ssoEndpoint: c.ssoEndpoint, configPath: getConfigPath(), aliases: c.aliases });
           return;
         }
 
@@ -103,8 +114,7 @@ export function registerConfigCommands(program: Command): void {
         console.log(`  Aliases:   ${aliases.length > 0 ? aliases.join(", ") : "(none)"}`);
         console.log(`  Config:    ${getConfigPath()}`);
       } catch (err) {
-        printError(err instanceof Error ? err.message : String(err));
-        process.exit(1);
+        handleError(err, { json: opts.json });
       }
     });
 

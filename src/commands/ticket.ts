@@ -1,67 +1,31 @@
 import { Command } from "commander";
-import { isConfigured, resolveAlias } from "../lib/config.js";
-import { ItxClient, type ItxUser } from "../lib/client.js";
+import { resolveAlias } from "../lib/config.js";
+import { type ItxUser } from "../lib/client.js";
+import { requireAuth } from "../lib/auth.js";
 import {
   printTable,
-  printJson,
+  printJsonOk,
   printError,
   printSuccess,
   printInfo,
+  printJsonError,
+  handleError,
+  exitWithError,
 } from "../lib/output.js";
+import {
+  ROLES,
+  ACTIVITY_TYPES,
+  activityTypeLabel,
+  formatDuration,
+  htmlToText,
+  projectActivity,
+  resolveTicketActivities,
+} from "../lib/activities.js";
+import type { TicketActivitiesResult, TicketSummary } from "../lib/schemas.js";
+import { buildCaseSearchBody, type TicketSearchOpts } from "../lib/ticketsearch.js";
 
-/** Role constants for ticket members. */
-export const ROLES = {
-  ASSIGNED_USER: 1,
-  CASE_FOLLOWER: 2,
-  CONTACT_PERSON: 20,
-} as const;
-
-/** Activity link types. */
-const LINK_TYPES = {
-  CONVERSATION: 13,
-  CASE: 14,
-} as const;
-
-/** Activity type IDs. */
-const ACTIVITY_TYPES = {
-  CHAT: 2,
-  CALL: 4,
-  NOTE: 8,
-  EMAIL: 11,
-  FB_CHAT: 13,
-  WECHAT: 14,
-  TICKET: 15,
-  SMS: 17,
-  SCREEN_SHARE: 24,
-  IG_CHAT: 27,
-  WHATSAPP: 29,
-  EMAIL_CONVERSATION: 21,
-} as const;
-
-/** Human-readable label for an activity type ID. */
-function activityTypeLabel(eatyId?: number): string {
-  switch (eatyId) {
-    case ACTIVITY_TYPES.CHAT: return "Chat";
-    case ACTIVITY_TYPES.CALL: return "Call";
-    case ACTIVITY_TYPES.NOTE: return "Note";
-    case ACTIVITY_TYPES.EMAIL: return "Email";
-    case ACTIVITY_TYPES.FB_CHAT: return "FB Chat";
-    case ACTIVITY_TYPES.WECHAT: return "WeChat";
-    case ACTIVITY_TYPES.SMS: return "SMS";
-    case ACTIVITY_TYPES.SCREEN_SHARE: return "Screen Share";
-    case ACTIVITY_TYPES.IG_CHAT: return "IG Chat";
-    case ACTIVITY_TYPES.WHATSAPP: return "WhatsApp";
-    default: return "Activity";
-  }
-}
-
-function requireAuth(): ItxClient {
-  if (!isConfigured()) {
-    printError('Not configured. Run "itx login" first.');
-    process.exit(1);
-  }
-  return new ItxClient();
-}
+// Re-export for callers that imported ROLES from this module.
+export { ROLES };
 
 /** Extract a translated name, falling back to defaultText. */
 function translateName(nameObj: Record<string, unknown> | undefined): string {
@@ -74,6 +38,37 @@ function translateName(nameObj: Record<string, unknown> | undefined): string {
     (nameObj.defaultText as string) ??
     ""
   );
+}
+
+/**
+ * Project a raw `/cases/search` case into the typed {@link TicketSummary} shape
+ * shared with `customer tickets`. Search results carry inline name objects for
+ * status/priority/category, so no refdata lookup is needed; status id is
+ * `emstId`, priority `empriId`, category `ctnoId`.
+ */
+function projectCaseSummary(c: Record<string, unknown>): TicketSummary {
+  const status = (c.emsStatus as { emstId?: number; name?: Record<string, unknown> }) ?? {};
+  const priority = (c.priority as { empriId?: number; name?: Record<string, unknown> }) ?? {};
+  const category = (c.category as { ctnoId?: number; name?: Record<string, unknown> }) ?? {};
+  const members = c.members as Record<string, unknown>[] | undefined;
+  const assigned = members?.find(
+    (m) => m.role === ROLES.ASSIGNED_USER && !m.anon,
+  );
+  const assignedUserId = (assigned?.user as { userId?: number } | undefined)?.userId;
+
+  return {
+    seqNo: (c.seqNo as number) ?? 0,
+    eactId: (c.eactId as number) ?? 0,
+    subject: (c.description as string) ?? "",
+    status: { id: status.emstId ?? null, name: translateName(status.name) },
+    priority: { id: priority.empriId ?? null, name: translateName(priority.name) },
+    category: { id: category.ctnoId ?? null, name: translateName(category.name) },
+    creationTs: (c.creationTs as string) ?? "",
+    updateTs: (c.updateTs as string) ?? "",
+    ...(assigned && assignedUserId
+      ? { assignedUser: { userId: assignedUserId, name: memberName(assigned) } }
+      : {}),
+  };
 }
 
 /** Build a display name from a member's user or entity. */
@@ -93,41 +88,6 @@ function memberName(member: Record<string, unknown>): string {
   return (member.name as string) ?? "(unknown)";
 }
 
-/** Strip HTML to plain text. */
-function htmlToText(html: string): string {
-  return html
-    .replace(/\r\n?/g, "\n")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p><p[^>]*>/gi, "\n")
-    .replace(/<\/?(p|div|tr|li|ul|ol|blockquote|h[1-6])[^>]*>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&ldquo;/g, "\u201C")
-    .replace(/&rdquo;/g, "\u201D")
-    .replace(/&lsquo;/g, "\u2018")
-    .replace(/&rsquo;/g, "\u2019")
-    .replace(/&mdash;/g, "\u2014")
-    .replace(/&ndash;/g, "\u2013")
-    .replace(/&#\d+;/g, "")
-    .replace(/[\uFEFF\u200B\u200C\u200D\u00AD\u00A0]/g, " ")
-    .replace(/^[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-/** Format seconds as human-readable duration. */
-function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
-
 export function registerTicketCommands(program: Command): void {
   const ticket = program
     .command("ticket")
@@ -137,56 +97,93 @@ export function registerTicketCommands(program: Command): void {
   ticket
     .command("list")
     .alias("ls")
-    .description("List tickets (itx ticket list --limit 10)")
+    .description("List or filter tickets (itx ticket list --status open --mine)")
     .option("-l, --limit <n>", "Maximum number of tickets to return", "25")
     .option("-o, --offset <n>", "Offset for pagination", "0")
-    .option("--json", "Output raw JSON")
-    .action(async (opts: { limit: string; offset: string; json: boolean }) => {
-      const client = requireAuth();
+    // Status / priority / category (resolved by name via refdata).
+    .option("--status <name...>", "Filter by status name (repeatable)")
+    .option("--exclude-status <name...>", "Exclude status name (repeatable)")
+    .option("--priority <name...>", "Filter by priority name (repeatable)")
+    .option("--category <name...>", "Filter by category name (repeatable)")
+    .option("--exclude-category <name...>", "Exclude category name (repeatable)")
+    // Assignment / ownership.
+    .option("--assignee <user>", "Filter by assigned user (alias, email, or name)")
+    .option("--mine", "Only cases assigned to me")
+    .option("--unassigned", "Only unassigned cases")
+    .option("--following", "Only cases I follow")
+    .option("--customer <seqNo>", "Only cases for this customer/prospect (UI number)")
+    .option("--customer-emen-id <n>", "Only cases for this entity (internal emenId)")
+    // Entity / ticket ids / text / dates.
+    .option("--seq <n...>", "Filter by specific ticket numbers (repeatable)")
+    .option("--search <text>", "Free-text match on description")
+    .option("--created-from <date>", "Created on/after ISO date")
+    .option("--created-to <date>", "Created on/before ISO date")
+    .option("--updated-from <date>", "Updated on/after ISO date")
+    .option("--updated-to <date>", "Updated on/before ISO date")
+    .option("--json", "Output JSON (TicketSummary[]; see `itx schema ticket list`)")
+    .action(
+      async (
+        opts: TicketSearchOpts & { limit: string; offset: string; json: boolean },
+      ) => {
+      const client = requireAuth(opts);
       try {
+        const limit = Number(opts.limit);
+        const offset = Number(opts.offset);
+        const body = await buildCaseSearchBody(client, opts);
         const data = await client.request<Record<string, unknown>[]>(
-          "/rest/itxems/cases",
+          "/rest/itxems/cases/search",
           {
+            method: "POST",
+            body,
             params: {
               getMembers: true,
-              limitFrom: Number(opts.offset),
-              limitTo: Number(opts.limit),
+              limitFrom: offset,
+              limitTo: limit,
             },
           },
         );
 
+        const cases = data ?? [];
+        const tickets = cases.map(projectCaseSummary);
+
         if (opts.json) {
-          printJson(data);
+          printJsonOk(tickets, {
+            pagination: {
+              limit,
+              offset,
+              total: tickets.length,
+              hasMore: tickets.length === limit,
+            },
+          });
           return;
         }
 
-        const cases = data ?? [];
-        printInfo(`Showing ${cases.length} tickets`);
+        printInfo(`Showing ${tickets.length} tickets`);
 
         printTable(
-          cases.map((c) => {
-            const status = c.emsStatus as
-              | { name?: Record<string, unknown> }
-              | undefined;
-            return {
-              id: c.seqNo,
-              subject: c.description ?? "",
-              status: translateName(status?.name),
-              created: c.creationTs
-                ? new Date(c.creationTs as string).toLocaleDateString()
-                : "",
-            };
-          }),
+          tickets.map((t) => ({
+            id: t.seqNo,
+            subject: t.subject,
+            status: t.status.name,
+            priority: t.priority.name,
+            category: t.category.name,
+            assignee: t.assignedUser?.name ?? "",
+            created: t.creationTs
+              ? new Date(t.creationTs).toLocaleDateString()
+              : "",
+          })),
           [
-            { key: "id", label: "ID", width: 10 },
-            { key: "subject", label: "Subject", width: 40 },
-            { key: "status", label: "Status", width: 15 },
-            { key: "created", label: "Created", width: 12 },
+            { key: "id", label: "ID", width: 8 },
+            { key: "subject", label: "Subject", width: 32 },
+            { key: "status", label: "Status", width: 12 },
+            { key: "priority", label: "Priority", width: 10 },
+            { key: "category", label: "Category", width: 16 },
+            { key: "assignee", label: "Assignee", width: 18 },
+            { key: "created", label: "Created", width: 11 },
           ],
         );
       } catch (err) {
-        printError(err instanceof Error ? err.message : String(err));
-        process.exit(1);
+        handleError(err, { json: opts.json });
       }
     });
 
@@ -195,7 +192,7 @@ export function registerTicketCommands(program: Command): void {
     .description("View ticket details (itx ticket view 43146)")
     .option("--json", "Output raw JSON")
     .action(async (id: string, opts: { json: boolean }) => {
-      const client = requireAuth();
+      const client = requireAuth(opts);
       try {
         const result = await client.request<
           Record<string, unknown> | Record<string, unknown>[]
@@ -208,12 +205,16 @@ export function registerTicketCommands(program: Command): void {
 
         const data = Array.isArray(result) ? result[0] : result;
         if (!data) {
-          printError(`Ticket #${id} not found.`);
-          process.exit(1);
+          if (opts.json) {
+            printJsonError("NOT_FOUND", `Ticket #${id} not found.`);
+          } else {
+            printError(`Ticket #${id} not found.`);
+          }
+          exitWithError("NOT_FOUND");
         }
 
         if (opts.json) {
-          printJson(data);
+          printJsonOk(data);
           return;
         }
 
@@ -257,8 +258,7 @@ export function registerTicketCommands(program: Command): void {
           }
         }
       } catch (err) {
-        printError(err instanceof Error ? err.message : String(err));
-        process.exit(1);
+        handleError(err, { json: opts.json });
       }
     });
 
@@ -274,10 +274,14 @@ export function registerTicketCommands(program: Command): void {
       }) => {
         const subject = subjectArg || opts.subject;
         if (!subject) {
-          printError("Subject is required. Provide as argument or with -s/--subject.");
-          process.exit(1);
+          if (opts.json) {
+            printJsonError("USAGE", "Subject is required. Provide as argument or with -s/--subject.");
+          } else {
+            printError("Subject is required. Provide as argument or with -s/--subject.");
+          }
+          exitWithError("USAGE");
         }
-        const client = requireAuth();
+        const client = requireAuth(opts);
         try {
           const data = await client.request<Record<string, unknown>>(
             "/rest/itxems/cases",
@@ -288,14 +292,13 @@ export function registerTicketCommands(program: Command): void {
           );
 
           if (opts.json) {
-            printJson(data);
+            printJsonOk(data);
             return;
           }
 
           printSuccess(`Ticket created: #${data.seqNo}`);
         } catch (err) {
-          printError(err instanceof Error ? err.message : String(err));
-          process.exit(1);
+          handleError(err, { json: opts.json });
         }
       },
     );
@@ -319,7 +322,7 @@ export function registerTicketCommands(program: Command): void {
           json: boolean;
         },
       ) => {
-        const client = requireAuth();
+        const client = requireAuth(opts);
         try {
           const body: Record<string, unknown> = { seqNo: Number(id) };
           if (opts.subject) body.description = opts.subject;
@@ -332,10 +335,13 @@ export function registerTicketCommands(program: Command): void {
           }
 
           if (Object.keys(body).length <= 1) {
-            printError(
-              "Provide at least one field to update (--subject, --status, --category, --assignee).",
-            );
-            process.exit(1);
+            const msg = "Provide at least one field to update (--subject, --status, --category, --assignee).";
+            if (opts.json) {
+              printJsonError("USAGE", msg);
+            } else {
+              printError(msg);
+            }
+            exitWithError("USAGE");
           }
 
           const data = await client.request<Record<string, unknown>>(
@@ -347,14 +353,13 @@ export function registerTicketCommands(program: Command): void {
           );
 
           if (opts.json) {
-            printJson(data);
+            printJsonOk(data);
             return;
           }
 
           printSuccess(`Ticket #${id} updated.`);
         } catch (err) {
-          printError(err instanceof Error ? err.message : String(err));
-          process.exit(1);
+          handleError(err, { json: opts.json });
         }
       },
     );
@@ -365,7 +370,7 @@ export function registerTicketCommands(program: Command): void {
     .description("List activities on a ticket (itx ticket activities 43146)")
     .option("--json", "Output raw JSON")
     .action(async (id: string, opts: { json: boolean }) => {
-      const client = requireAuth();
+      const client = requireAuth(opts);
       try {
         // 1. Fetch case by seqNo to get eactId + comments
         const result = await client.request<
@@ -376,115 +381,42 @@ export function registerTicketCommands(program: Command): void {
 
         const caseData = Array.isArray(result) ? result[0] : result;
         if (!caseData) {
-          printError(`Ticket #${id} not found.`);
-          process.exit(1);
+          if (opts.json) {
+            printJsonError("NOT_FOUND", `Ticket #${id} not found.`);
+          } else {
+            printError(`Ticket #${id} not found.`);
+          }
+          exitWithError("NOT_FOUND");
         }
 
         const eactId = caseData.eactId as number;
         const texts = caseData.texts as Record<string, unknown>[] | undefined;
 
-        // 2. Fetch case with links via search endpoint
-        const fullCaseResult = await client.request<
-          Record<string, unknown> | Record<string, unknown>[]
-        >("/rest/itxems/cases/search", {
-          method: "POST",
-          body: { eactIds: [eactId] },
-        });
-
-        const fullCase = Array.isArray(fullCaseResult)
-          ? fullCaseResult[0]
-          : fullCaseResult;
-
-        // 3. Extract linked activity IDs from case links
-        const links = ((fullCase?.links ?? []) as Record<string, unknown>[]);
-        const caseLinks = links.filter((link) => {
-          const to = link.to as { eactId?: number } | undefined;
-          return link.type === LINK_TYPES.CASE && to?.eactId === eactId;
-        });
-        const linkedActivityIds = caseLinks.map(
-          (link) => (link.from as { eactId: number }).eactId,
-        );
-
-        // 4. Fetch linked activities
-        let activities: Record<string, unknown>[] = [];
-        if (linkedActivityIds.length > 0) {
-          const actResult = await client.request<Record<string, unknown>[]>(
-            "/rest/itxems/activities/search",
-            {
-              method: "POST",
-              body: { eactIds: linkedActivityIds, getMembers: true },
-            },
-          );
-          activities = actResult ?? [];
-
-          // 5. Resolve email conversations to individual emails
-          const emailConversations = activities.filter(
-            (a) =>
-              (a.activityType as { eatyId?: number })?.eatyId ===
-              ACTIVITY_TYPES.EMAIL_CONVERSATION,
-          );
-
-          for (const conv of emailConversations) {
-            const emails = await client.request<Record<string, unknown>[]>(
-              "/rest/itxems/activities/search",
-              {
-                method: "POST",
-                body: {
-                  activityLinkFilters: [
-                    {
-                      eactIds: [conv.eactId],
-                      linkTypes: [LINK_TYPES.CONVERSATION],
-                      linkDirection: "FROM",
-                    },
-                  ],
-                  getMembers: true,
-                },
-              },
-            );
-            activities = activities.filter(
-              (a) => a.eactId !== conv.eactId,
-            );
-            activities.push(...(emails ?? []));
-          }
-        }
-
-        // Sort activities by creation timestamp
-        activities.sort((a, b) => {
-          const aTs = new Date((a.creationTs as string) ?? 0).getTime();
-          const bTs = new Date((b.creationTs as string) ?? 0).getTime();
-          return aTs - bTs;
-        });
-
-        // Fetch email body content for all email activities
-        const emailActivities = activities.filter(
-          (a) =>
-            (a.activityType as { eatyId?: number })?.eatyId ===
-            ACTIVITY_TYPES.EMAIL,
-        );
-        const emailBodies = new Map<number, string>();
-        await Promise.all(
-          emailActivities.map(async (email) => {
-            try {
-              const html = await client.request<string>(
-                "/rest/itxems/emailcontent",
-                { params: { eactId: email.eactId as number } },
-              );
-              emailBodies.set(
-                email.eactId as number,
-                typeof html === "string" ? htmlToText(html) : "",
-              );
-            } catch {
-              // Email content may not be available
-            }
-          }),
+        const { activities, emailBodies } = await resolveTicketActivities(
+          client,
+          eactId,
+          { includeBodies: true },
         );
 
         if (opts.json) {
-          const enriched = activities.map((a) => ({
-            ...a,
-            _emailBody: emailBodies.get(a.eactId as number),
-          }));
-          printJson({ activities: enriched, comments: texts ?? [] });
+          const result: TicketActivitiesResult = {
+            ticket: { seqNo: Number(id), eactId },
+            activities: activities.map((a) =>
+              projectActivity(a, emailBodies.get(a.eactId as number)),
+            ),
+            comments: (texts ?? []).map((t) => {
+              const creator = (t.creator as { firstName?: string; lastName?: string }) ?? {};
+              return {
+                ts: (t.creationTs as string) ?? "",
+                author: {
+                  firstName: creator.firstName ?? null,
+                  lastName: creator.lastName ?? null,
+                },
+                text: htmlToText((t.text as string) ?? ""),
+              };
+            }),
+          };
+          printJsonOk(result);
           return;
         }
 
@@ -615,8 +547,7 @@ export function registerTicketCommands(program: Command): void {
           }
         }
       } catch (err) {
-        printError(err instanceof Error ? err.message : String(err));
-        process.exit(1);
+        handleError(err, { json: opts.json });
       }
     });
 
@@ -634,10 +565,15 @@ export function registerTicketCommands(program: Command): void {
       ) => {
         const message = messageArg || opts.message;
         if (!message) {
-          printError("Message is required. Provide as argument or with -m/--message.");
-          process.exit(1);
+          const msg = "Message is required. Provide as argument or with -m/--message.";
+          if (opts.json) {
+            printJsonError("USAGE", msg);
+          } else {
+            printError(msg);
+          }
+          exitWithError("USAGE");
         }
-        const client = requireAuth();
+        const client = requireAuth(opts);
         try {
           // Fetch case by seqNo to get eactId
           const result = await client.request<
@@ -648,8 +584,12 @@ export function registerTicketCommands(program: Command): void {
 
           const caseData = Array.isArray(result) ? result[0] : result;
           if (!caseData) {
-            printError(`Ticket #${id} not found.`);
-            process.exit(1);
+            if (opts.json) {
+              printJsonError("NOT_FOUND", `Ticket #${id} not found.`);
+            } else {
+              printError(`Ticket #${id} not found.`);
+            }
+            exitWithError("NOT_FOUND");
           }
 
           const eactId = caseData.eactId as number;
@@ -665,8 +605,13 @@ export function registerTicketCommands(program: Command): void {
               const resolved = resolveAlias(mentionInput);
               const user = findUser(users, resolved);
               if (!user) {
-                printError(`User not found for: ${mentionInput}`);
-                process.exit(1);
+                const msg = `User not found for: ${mentionInput}`;
+                if (opts.json) {
+                  printJsonError("NOT_FOUND", msg);
+                } else {
+                  printError(msg);
+                }
+                exitWithError("NOT_FOUND");
               }
 
               const displayName = `@${user.firstName} ${user.lastName}`;
@@ -689,14 +634,13 @@ export function registerTicketCommands(program: Command): void {
           const response = await client.addActivityText(eactId, text, data);
 
           if (opts.json) {
-            printJson(response);
+            printJsonOk(response);
             return;
           }
 
           printSuccess(`Comment added to ticket #${id}.`);
         } catch (err) {
-          printError(err instanceof Error ? err.message : String(err));
-          process.exit(1);
+          handleError(err, { json: opts.json });
         }
       },
     );

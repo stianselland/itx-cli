@@ -6,6 +6,9 @@ import { registerConfigCommands } from "./commands/config.js";
 import { registerTicketCommands } from "./commands/ticket.js";
 import { registerUserCommands } from "./commands/user.js";
 import { registerAliasCommands } from "./commands/alias.js";
+import { registerCustomerCommands } from "./commands/customer.js";
+import { registerProspectCommands } from "./commands/prospect.js";
+import { registerHelpCommands } from "./commands/help.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -21,5 +24,8 @@ registerConfigCommands(program);
 registerTicketCommands(program);
 registerUserCommands(program);
 registerAliasCommands(program);
+registerCustomerCommands(program);
+registerProspectCommands(program);
+registerHelpCommands(program);
 
 program.parse();

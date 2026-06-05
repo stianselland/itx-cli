@@ -12,5 +12,7 @@ export default defineConfig({
     },
     // Tests still share the same config file within a run, so keep serial.
     fileParallelism: false,
+    include: ["src/**/*.test.ts"],
+    exclude: ["dist/**", "node_modules/**"],
   },
 });
